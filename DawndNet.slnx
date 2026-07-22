@@ -1,0 +1,18 @@
+<Solution>
+  <Folder Name="/Solution Items/">
+    <File Path=".editorconfig" />
+    <File Path=".gitignore" />
+    <File Path="Directory.Build.props" />
+    <File Path="LICENSE" />
+    <File Path="README.md" />
+  </Folder>
+  <Project Path="src/Injector/Injector.csproj">
+    <Platform Solution="*|*" Project="x86" />
+  </Project>
+  <Project Path="src/Payload/Payload.csproj">
+    <Platform Solution="*|*" Project="x86" />
+  </Project>
+  <Project Path="src/Shared/Shared.csproj">
+    <Platform Solution="*|*" Project="x86" />
+  </Project>
+</Solution>
