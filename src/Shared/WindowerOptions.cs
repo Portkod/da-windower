@@ -7,15 +7,23 @@ namespace DawndNet.Shared;
 /// </summary>
 internal struct WindowerOptions
 {
+    public const int MinScale = 1;
+    public const int MaxScale = 2;
+
     public bool Borderless { get; set; }
     public bool KeepIntro { get; set; }
     public bool LockAspect { get; set; }
     public bool CursorFix { get; set; }
+    public bool Rain { get; set; }
+
+    // Integer scale of the 640x480 render size
+    public int Scale { get; set; }
 
     public static WindowerOptions Defaults => new()
     {
         LockAspect = true,
         CursorFix = true,
+        Scale = MinScale
     };
 
     // Returns false if the key is not a windowing option
@@ -36,6 +44,14 @@ internal struct WindowerOptions
         else if (key.Equals("cursorfix", StringComparison.OrdinalIgnoreCase))
         {
             CursorFix = IniFile.IsTrue(value);
+        }
+        else if (key.Equals("rain", StringComparison.OrdinalIgnoreCase))
+        {
+            Rain = IniFile.IsTrue(value);
+        }
+        else if (key.Equals("scale", StringComparison.OrdinalIgnoreCase))
+        {
+            Scale = int.TryParse(value, out var scale) ? Clamp(scale) : MinScale;
         }
         else
         {
@@ -58,6 +74,8 @@ internal struct WindowerOptions
         if (KeepIntro) flags |= ConfigFlags.KeepIntro;
         if (LockAspect) flags |= ConfigFlags.LockAspect;
         if (CursorFix) flags |= ConfigFlags.CursorFix;
+        if (Rain) flags |= ConfigFlags.Rain;
+        flags |= (uint)Clamp(Scale) << ConfigFlags.ScaleShift;
         return flags;
     }
 
@@ -67,5 +85,9 @@ internal struct WindowerOptions
         KeepIntro = (flags & ConfigFlags.KeepIntro) != 0,
         LockAspect = (flags & ConfigFlags.LockAspect) != 0,
         CursorFix = (flags & ConfigFlags.CursorFix) != 0,
+        Rain = (flags & ConfigFlags.Rain) != 0,
+        Scale = Clamp((int)((flags & ConfigFlags.ScaleMask) >> ConfigFlags.ScaleShift)),
     };
+
+    private static int Clamp(int scale) => scale < MinScale ? MinScale : scale > MaxScale ? MaxScale : scale;
 }

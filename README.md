@@ -1,4 +1,4 @@
-# DawndNet
+# Dark Ages windower
 
 A C# windower for the Dark Ages client.
 
@@ -17,6 +17,8 @@ A C# windower for the Dark Ages client.
   No more flickering cursor in 5.x and later clients.
 - [**Intro skip**](#intro-video-skipped-by-default)
   No annoying video when starting the client.
+- [**Rainy weather (only for 7.41)**](#rainy-weather)
+  Re-creates the rainy weather effect.
 
 ## Two ways to run it
 
@@ -52,7 +54,7 @@ first runs, which is after the client's early startup. Because of this, **multi-
 
 If you want these features you'll have to patch your game client by yourself.
 
-### Forwarding arguments to the game
+## Forwarding arguments to the game
 
 Any argument that is not a supported setting is forwarded verbatim to the game, so
 older clients can, for example, be given server info:
@@ -69,6 +71,8 @@ Usage: `--borderless=true` / `--borderless=false`, and a bare `--borderless` mea
  - `--keepintro` (skipped by default)
  - `--lockaspect` (on by default)
  - `--cursorfix` (on by default, auto-limited by client)
+ - `--rain` (off by default)
+ - `--scale=<1-2>` (1 by default, see [Window scale](#window-scale))
  - `--exe <path>` (or `--exe=<path>`)
  - `--ignoreini`
 
@@ -85,22 +89,29 @@ borderless=false
 keepintro=false
 lockaspect=true
 cursorfix=true
+rain=false
+scale=1
 #exe=C:\Dark Ages\Custom_Darkages.exe
 #args=127.0.0.1 2610
 ```
 `args` are appended verbatim to the game command line.
 
-### Borderless fullscreen
+### Window scale
 
-```
-DawndNet.exe --borderless
-```
+`scale` is the integer multiple of the 640x480 image the window starts at:
+
+| `scale` | Window client area |
+| ------- | ------------------ |
+| `1`     | 640x480 (default)  |
+| `2`     | 1280x960           |
+
+### Borderless fullscreen
 
 The window becomes a caption-less popup filling the primary monitor, and the 640x480
 image is centered and scaled up preserving its 4:3 aspect ratio, with black bars on
 the sides.
 
-### Intro video (skipped by default)
+### Intro video
 
 The intro Bink video (`CIb.bik` / `CIf.bik`) is played through
 `binkw32!BinkOpen`. The payload IAT-hooks that import and sets the returned video's
@@ -121,6 +132,14 @@ This is **auto-limited to the clients that need it**, the ones presenting via `B
 The detection keys off the present path (`BltFast` vs `Blt`/`Unlock`), so it stays
 version-address-independent. `--cursorfix=false` (or `cursorfix = false` in the ini)
 forces immediate present for every client.
+
+### Rainy weather
+***Only for client 7.41***
+
+Re-implements the rainy weather effect through the newer snow particle system.
+Use F11 to force-toggle rain, or enter a rainy map.
+
+Referenced https://github.com/ewrogers/darkages-741-re for client specifications.
 
 ## Build
 

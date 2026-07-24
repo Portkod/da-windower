@@ -24,14 +24,24 @@ internal static unsafe partial class Interop
     [DefaultDllImportSearchPaths(DllImportSearchPath.System32)]
     public static partial IntPtr GetProcAddress(IntPtr hModule, string lpProcName);
 
-    [LibraryImport("kernel32")]
+    [LibraryImport("kernel32", SetLastError = true)]
     [DefaultDllImportSearchPaths(DllImportSearchPath.System32)]
     [return: MarshalAs(UnmanagedType.Bool)]
     public static partial bool VirtualProtect(void* lpAddress, uint dwSize, uint flNewProtect, out uint lpflOldProtect);
 
+    // MEMORY_BASIC_INFORMATION (x86) is 28 bytes; pass a buffer of that size.
     [LibraryImport("kernel32")]
     [DefaultDllImportSearchPaths(DllImportSearchPath.System32)]
-    public static partial uint GetTickCount();
+    public static partial nuint VirtualQuery(void* lpAddress, void* lpBuffer, nuint dwLength);
+
+    [LibraryImport("kernel32")]
+    [DefaultDllImportSearchPaths(DllImportSearchPath.System32)]
+    public static partial void* VirtualAlloc(void* lpAddress, uint dwSize, uint flAllocationType, uint flProtect);
+
+    [LibraryImport("kernel32")]
+    [DefaultDllImportSearchPaths(DllImportSearchPath.System32)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    public static partial bool FlushInstructionCache(IntPtr hProcess, void* lpBaseAddress, uint dwSize);
 
     [LibraryImport("kernel32")]
     [DefaultDllImportSearchPaths(DllImportSearchPath.System32)]
@@ -58,6 +68,36 @@ internal static unsafe partial class Interop
     [LibraryImport("gdi32")]
     [DefaultDllImportSearchPaths(DllImportSearchPath.System32)]
     public static partial int SetStretchBltMode(IntPtr hdc, int mode);
+
+    [LibraryImport("gdi32")]
+    [DefaultDllImportSearchPaths(DllImportSearchPath.System32)]
+    public static partial IntPtr CreateCompatibleDC(IntPtr hdc);
+
+    [LibraryImport("gdi32")]
+    [DefaultDllImportSearchPaths(DllImportSearchPath.System32)]
+    public static partial IntPtr CreateDIBSection(IntPtr hdc, void* pbmi, uint usage, void** ppvBits, IntPtr hSection, uint offset);
+
+    [LibraryImport("gdi32")]
+    [DefaultDllImportSearchPaths(DllImportSearchPath.System32)]
+    public static partial IntPtr SelectObject(IntPtr hdc, IntPtr h);
+
+    [LibraryImport("gdi32")]
+    [DefaultDllImportSearchPaths(DllImportSearchPath.System32)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    public static partial bool DeleteObject(IntPtr ho);
+
+    [LibraryImport("gdi32")]
+    [DefaultDllImportSearchPaths(DllImportSearchPath.System32)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    public static partial bool DeleteDC(IntPtr hdc);
+
+    // Blit with a transparent color (GDI does the keying itself, so this works where the emulated
+    // DirectDraw has no color-key hardware). msimg32.
+    [LibraryImport("msimg32")]
+    [DefaultDllImportSearchPaths(DllImportSearchPath.System32)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    public static partial bool TransparentBlt(IntPtr hdcDest, int xDest, int yDest, int wDest, int hDest,
+        IntPtr hdcSrc, int xSrc, int ySrc, int wSrc, int hSrc, uint crTransparent);
 
     [LibraryImport("gdi32")]
     [DefaultDllImportSearchPaths(DllImportSearchPath.System32)]

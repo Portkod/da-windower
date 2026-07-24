@@ -18,6 +18,9 @@ internal static partial class Interop
         public const uint PAGE_READWRITE = 0x04;
         public const uint PAGE_EXECUTE_READWRITE = 0x40;
 
+        public const uint MEM_COMMIT = 0x1000;
+        public const uint MEM_RESERVE = 0x2000;
+
         #endregion
 
         #region Window styles
@@ -63,6 +66,7 @@ internal static partial class Interop
         public const uint WM_ACTIVATEAPP = 0x001C; // wParam==0 is deactivating
         public const uint WM_NCMOUSEMOVE = 0x00A0; // mouse over the non-client area (borders/title)
         public const uint WM_SIZING = 0x0214; // drag-resize in progress. lParam is the proposed Rect
+        public const uint WM_KEYDOWN = 0x0100;
         public const uint WM_KEYUP = 0x0101;
         public const uint WM_SYSKEYUP = 0x0105;
         public const uint WM_SYSCHAR = 0x0106;
@@ -131,6 +135,7 @@ internal static partial class Interop
         {
             public const uint WAIT = 0x01000000;
             public const uint COLORFILL = 0x00000400;
+            public const uint KEYSRC = 0x00008000; // key off the source surface's set color key
         }
 
         /// <summary>
@@ -139,6 +144,24 @@ internal static partial class Interop
         public static class Lock
         {
             public const uint WAIT = 0x00000001;
+        }
+
+        /// <summary>
+        ///     BltFast() dwTrans flags.
+        /// </summary>
+        public static class BltFast
+        {
+            public const uint NOCOLORKEY = 0x00000000;
+            public const uint SRCCOLORKEY = 0x00000001;
+            public const uint WAIT = 0x00000010;
+        }
+
+        /// <summary>
+        ///     SetColorKey() dwFlags. DDCKEY_SRCBLT keys the source of a blit.
+        /// </summary>
+        public static class ColorKey
+        {
+            public const uint SRCBLT = 0x00000001;
         }
 
         /// <summary>
@@ -157,6 +180,7 @@ internal static partial class Interop
                 public const uint HEIGHT = 0x00000002;
                 public const uint WIDTH = 0x00000004;
                 public const uint PIXELFORMAT = 0x00001000;
+                public const uint CKSRCBLT = 0x00004000; // ddckCKSrcBlt is valid
             }
 
             // ReSharper disable InconsistentNaming
@@ -173,6 +197,8 @@ internal static partial class Interop
                 public const int dwBackBufferCount = 0x14;
                 public const int lPitch = 0x10;
                 public const int lpSurface = 0x24;
+                public const int ckSrcBlt_low = 0x40; // ddckCKSrcBlt.dwColorSpaceLowValue
+                public const int ckSrcBlt_high = 0x44; // ddckCKSrcBlt.dwColorSpaceHighValue
                 public const int ddsCaps = 0x68;
                 public const int pf_dwSize = 0x48;
                 public const int pf_dwFlags = 0x4C;
@@ -268,9 +294,12 @@ internal static partial class Interop
                 public const int Blt = 0x14;
                 public const int BltFast = 0x1C;
                 public const int Flip = 0x2C;
+                public const int GetDC = 0x44;
+                public const int ReleaseDC = 0x68;
                 public const int Lock = 0x64;
                 public const int Unlock = 0x80;
                 public const int SetClipper = 0x70;
+                public const int SetColorKey = 0x74;
                 public const int SetPalette = 0x7C;
                 public const int GetSurfaceDesc = 0x58;
                 public const int Restore = 0x6C;
