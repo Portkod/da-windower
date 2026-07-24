@@ -17,6 +17,8 @@ internal readonly struct PayloadConfig
     public bool SkipIntro { get; private init; }
     public bool LockAspectRatio { get; private init; }
     public bool CursorFix { get; private init; }
+    public bool Rain { get; private init; }
+    public int Scale { get; private init; }
 
     public static PayloadConfig Resolve(IntPtr configParam)
     {
@@ -28,7 +30,7 @@ internal readonly struct PayloadConfig
 
         var cfg = From(WindowerOptions.FromFlags(flags));
         Log.Write($"Config (injector): borderless={cfg.BorderlessRequested} skipIntro={cfg.SkipIntro} " +
-                  $"lockAspect={cfg.LockAspectRatio} cursorFix={cfg.CursorFix}");
+                  $"lockAspect={cfg.LockAspectRatio} cursorFix={cfg.CursorFix} rain={cfg.Rain} scale={cfg.Scale}");
         return cfg;
     }
 
@@ -53,7 +55,8 @@ internal readonly struct PayloadConfig
 
                 var loaded = From(options);
                 Log.Write($"Config ({ConfigFlags.SettingsFile}): borderless={loaded.BorderlessRequested} " +
-                          $"skipIntro={loaded.SkipIntro} lockAspect={loaded.LockAspectRatio} cursorFix={loaded.CursorFix}");
+                          $"skipIntro={loaded.SkipIntro} lockAspect={loaded.LockAspectRatio} cursorFix={loaded.CursorFix} " +
+                          $"rain={loaded.Rain} scale={loaded.Scale}");
                 return loaded;
             }
         }
@@ -67,6 +70,8 @@ internal readonly struct PayloadConfig
         SkipIntro = !o.KeepIntro,
         LockAspectRatio = o.LockAspect,
         CursorFix = o.CursorFix,
+        Rain = o.Rain,
+        Scale = o.Scale,
     };
 
     private static unsafe string? GameDirectory()

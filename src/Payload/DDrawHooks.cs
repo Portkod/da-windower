@@ -28,6 +28,12 @@ internal static unsafe class DDrawHooks
     // Maintain aspect ratio when resizing the window
     private static bool _lockAspectRatio = true;
 
+    // Recreate the removed rain weather overlay
+    private static bool _rain;
+
+    // Integer scale the window starts at, 1 = 640x480, 2 = 1280x960
+    private static int _startScale = 1;
+
     private static void* _realDirectDrawCreate; // proxy mode, system ddraw
     private static void* _origDirectDrawCreate; // inject mode, IAT original
     private static void* _origCreateSurface;
@@ -137,6 +143,8 @@ internal static unsafe class DDrawHooks
         _skipIntro = cfg.SkipIntro;
         _lockAspectRatio = cfg.LockAspectRatio;
         _cursorFix = cfg.CursorFix;
+        _rain = cfg.Rain;
+        _startScale = cfg.Scale;
     }
 
     [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvStdcall) })]
@@ -417,6 +425,8 @@ internal static unsafe class DDrawHooks
         // the primary, or our 8bpp->desktop present converts every index to black.
         _origSetPalette = HookSlot(_offscreen, Vtbl.Surface.SetPalette, (delegate* unmanaged[Stdcall]<IntPtr, IntPtr, int>)&SetPaletteHook);
         Log.Write("Offscreen render surface ready; Blt/BltFast/Flip/Unlock/SetPalette hooked.");
+
+        RainOverlay.Init(_rain);
         return hr;
     }
 
@@ -951,12 +961,13 @@ internal static unsafe class DDrawHooks
         }
         else if (sizeToRender)
         {
+            var scale = _startScale > 0 ? _startScale : 1;
             _ = SetWindowLongA(hwnd, GWL_STYLE, (int)WS_OVERLAPPEDWINDOW);
             Rect r;
             r.left = 0;
             r.top = 0;
-            r.right = _renderW;
-            r.bottom = _renderH;
+            r.right = _renderW * scale;
+            r.bottom = _renderH * scale;
             AdjustWindowRectEx(ref r, WS_OVERLAPPEDWINDOW, false, 0);
             SetWindowPos(hwnd, IntPtr.Zero, 0, 0, r.right - r.left, r.bottom - r.top,
                 SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED);
@@ -980,7 +991,8 @@ internal static unsafe class DDrawHooks
 
         var procPtr = (void*)(delegate* unmanaged[Stdcall]<IntPtr, uint, IntPtr, IntPtr, IntPtr>)&WndProcHook;
         _origWndProc = SetWindowLongA(hwnd, GWL_WNDPROC, (int)(nint)procPtr);
-        Log.Write($"Window set up (render {_renderW}x{_renderH}, sizeToRender={sizeToRender}) and subclassed.");
+        var scaleNote = _borderless ? "scale=ignored (borderless)" : $"scale={_startScale}x";
+        Log.Write($"Window set up (render {_renderW}x{_renderH}, {scaleNote}, sizeToRender={sizeToRender}) and subclassed.");
 
         if (_borderless)
         {
@@ -1117,6 +1129,11 @@ internal static unsafe class DDrawHooks
         if (_selfMinimizing)
         {
             return DefWindowProcA(hwnd, msg, wParam, lParam);
+        }
+
+        if (msg == WM_KEYDOWN && RainOverlay.OnKeyDown(checked((int)wParam)))
+        {
+            return IntPtr.Zero;
         }
 
         // Repaint the client area from DirectDraw, so let the GDI background erase fall
