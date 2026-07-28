@@ -15,6 +15,7 @@ internal struct WindowerOptions
     public bool LockAspect { get; set; }
     public bool CursorFix { get; set; }
     public bool Rain { get; set; }
+    public bool Map { get; set; }
 
     // Integer scale of the 640x480 render size
     public int Scale { get; set; }
@@ -23,6 +24,7 @@ internal struct WindowerOptions
     {
         LockAspect = true,
         CursorFix = true,
+        Map = true,
         Scale = MinScale
     };
 
@@ -48,6 +50,10 @@ internal struct WindowerOptions
         else if (key.Equals("rain", StringComparison.OrdinalIgnoreCase))
         {
             Rain = IniFile.IsTrue(value);
+        }
+        else if (key.Equals("map", StringComparison.OrdinalIgnoreCase))
+        {
+            Map = IniFile.IsTrue(value);
         }
         else if (key.Equals("scale", StringComparison.OrdinalIgnoreCase))
         {
@@ -75,6 +81,7 @@ internal struct WindowerOptions
         if (LockAspect) flags |= ConfigFlags.LockAspect;
         if (CursorFix) flags |= ConfigFlags.CursorFix;
         if (Rain) flags |= ConfigFlags.Rain;
+        if (Map) flags |= ConfigFlags.Map;
         flags |= (uint)Clamp(Scale) << ConfigFlags.ScaleShift;
         return flags;
     }
@@ -86,6 +93,7 @@ internal struct WindowerOptions
         LockAspect = (flags & ConfigFlags.LockAspect) != 0,
         CursorFix = (flags & ConfigFlags.CursorFix) != 0,
         Rain = (flags & ConfigFlags.Rain) != 0,
+        Map = (flags & ConfigFlags.Map) != 0,
         Scale = Clamp((int)((flags & ConfigFlags.ScaleMask) >> ConfigFlags.ScaleShift)),
     };
 

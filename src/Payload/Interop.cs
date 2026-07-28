@@ -47,6 +47,10 @@ internal static unsafe partial class Interop
     [DefaultDllImportSearchPaths(DllImportSearchPath.System32)]
     public static partial uint GetModuleFileNameA(IntPtr hModule, byte* lpFilename, uint nSize);
 
+    [LibraryImport("kernel32")]
+    [DefaultDllImportSearchPaths(DllImportSearchPath.System32)]
+    public static partial uint GetTickCount();
+
     [LibraryImport("user32")]
     [DefaultDllImportSearchPaths(DllImportSearchPath.System32)]
     public static partial int GetSystemMetrics(int nIndex);
@@ -68,36 +72,6 @@ internal static unsafe partial class Interop
     [LibraryImport("gdi32")]
     [DefaultDllImportSearchPaths(DllImportSearchPath.System32)]
     public static partial int SetStretchBltMode(IntPtr hdc, int mode);
-
-    [LibraryImport("gdi32")]
-    [DefaultDllImportSearchPaths(DllImportSearchPath.System32)]
-    public static partial IntPtr CreateCompatibleDC(IntPtr hdc);
-
-    [LibraryImport("gdi32")]
-    [DefaultDllImportSearchPaths(DllImportSearchPath.System32)]
-    public static partial IntPtr CreateDIBSection(IntPtr hdc, void* pbmi, uint usage, void** ppvBits, IntPtr hSection, uint offset);
-
-    [LibraryImport("gdi32")]
-    [DefaultDllImportSearchPaths(DllImportSearchPath.System32)]
-    public static partial IntPtr SelectObject(IntPtr hdc, IntPtr h);
-
-    [LibraryImport("gdi32")]
-    [DefaultDllImportSearchPaths(DllImportSearchPath.System32)]
-    [return: MarshalAs(UnmanagedType.Bool)]
-    public static partial bool DeleteObject(IntPtr ho);
-
-    [LibraryImport("gdi32")]
-    [DefaultDllImportSearchPaths(DllImportSearchPath.System32)]
-    [return: MarshalAs(UnmanagedType.Bool)]
-    public static partial bool DeleteDC(IntPtr hdc);
-
-    // Blit with a transparent color (GDI does the keying itself, so this works where the emulated
-    // DirectDraw has no color-key hardware). msimg32.
-    [LibraryImport("msimg32")]
-    [DefaultDllImportSearchPaths(DllImportSearchPath.System32)]
-    [return: MarshalAs(UnmanagedType.Bool)]
-    public static partial bool TransparentBlt(IntPtr hdcDest, int xDest, int yDest, int wDest, int hDest,
-        IntPtr hdcSrc, int xSrc, int ySrc, int wSrc, int hSrc, uint crTransparent);
 
     [LibraryImport("gdi32")]
     [DefaultDllImportSearchPaths(DllImportSearchPath.System32)]
@@ -176,6 +150,15 @@ internal static unsafe partial class Interop
     [LibraryImport("user32")]
     [DefaultDllImportSearchPaths(DllImportSearchPath.System32)]
     public static partial int ShowCursor([MarshalAs(UnmanagedType.Bool)] bool bShow);
+
+    [LibraryImport("user32")]
+    [DefaultDllImportSearchPaths(DllImportSearchPath.System32)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    public static partial bool GetKeyboardState(byte* lpKeyState);
+
+    [LibraryImport("user32")]
+    [DefaultDllImportSearchPaths(DllImportSearchPath.System32)]
+    public static partial uint MapVirtualKeyA(uint uCode, uint uMapType);
 
     [LibraryImport("kernel32")]
     [DefaultDllImportSearchPaths(DllImportSearchPath.System32)]

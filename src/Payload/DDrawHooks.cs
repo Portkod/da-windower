@@ -22,6 +22,9 @@ internal static unsafe class DDrawHooks
     // Snap distance for exact integer scale resizing.
     private const int SnapPx = 32;
 
+    // The activation-time modifier reset, kept as a safety net behind the deactivation key release.
+    private const bool ResetModifiersOnActivate = true;
+
     // Flicker cursor fix, present game+cursor at the same time.
     private static bool _cursorFix = true;
 
@@ -30,6 +33,9 @@ internal static unsafe class DDrawHooks
 
     // Recreate the removed rain weather overlay
     private static bool _rain;
+
+    // Full map overlay
+    private static bool _map;
 
     // Integer scale the window starts at, 1 = 640x480, 2 = 1280x960
     private static int _startScale = 1;
@@ -67,12 +73,26 @@ internal static unsafe class DDrawHooks
     private static IntPtr _hwnd;
     private static IntPtr _offscreen;
     private static IntPtr _primary;
+
+    // Map-overlay compositing
+    private static IntPtr _compose;
+    private static int _composeW, _composeH;
+    private static uint _composeTick;
+    private static bool _composeValid;
+    private const int ComposeHz = 100;
+    private static int _contentW, _contentH; // the size the frame is last known to be presented at
+    private static Rect _framePart; // the part of the scratch the composed frame occupies
+    private const int MaxComposeW = 1920;
+    private const int MaxComposeH = 1440;
+    private static bool _overlaySurfacesFailed;
+    private static int _overlayLogs;
     private static bool _auxInstalled;
     private static bool _vtableHooked;
     private static bool _windowedReady;
     private static bool _windowFixed;
     private static bool _cursorVisible;
     private static bool _selfMinimizing; // for borderless SW_MINIMIZE
+    private static bool _focused = true; // last focus state acted on
 
     private static int _renderW = Width;
     private static int _renderH = Height;
@@ -144,6 +164,7 @@ internal static unsafe class DDrawHooks
         _lockAspectRatio = cfg.LockAspectRatio;
         _cursorFix = cfg.CursorFix;
         _rain = cfg.Rain;
+        _map = cfg.Map;
         _startScale = cfg.Scale;
     }
 
@@ -427,7 +448,38 @@ internal static unsafe class DDrawHooks
         Log.Write("Offscreen render surface ready; Blt/BltFast/Flip/Unlock/SetPalette hooked.");
 
         RainOverlay.Init(_rain);
+        InitMapOverlay();
         return hr;
+    }
+
+    private static void InitMapOverlay()
+    {
+        uint r = 0xF800, g = 0x07E0, b = 0x001F;
+        if (_renderBpp == 16 && _offscreen != IntPtr.Zero)
+        {
+            var sd = stackalloc byte[SurfaceDesc.SIZE];
+            for (var i = 0; i < SurfaceDesc.SIZE; i++)
+            {
+                sd[i] = 0;
+            }
+
+            Write32(sd, SurfaceDesc.Offsets.dwSize, SurfaceDesc.SIZE);
+            var getDesc = (delegate* unmanaged[Stdcall]<IntPtr, IntPtr, int>)Slot(_offscreen, Vtbl.Surface.GetSurfaceDesc);
+            if (getDesc(_offscreen, (IntPtr)sd) == DD_OK)
+            {
+                var sr = Read32(sd, SurfaceDesc.Offsets.pf_dwRBitMask);
+                var sg = Read32(sd, SurfaceDesc.Offsets.pf_dwGBitMask);
+                var sb = Read32(sd, SurfaceDesc.Offsets.pf_dwBBitMask);
+                if (sr != 0 && sg != 0 && sb != 0)
+                {
+                    r = sr;
+                    g = sg;
+                    b = sb;
+                }
+            }
+        }
+
+        MapOverlay.Init(_map && _renderBpp == 16, r, g, b);
     }
 
     private static void LogSurfaceDesc(IntPtr surface, string label)
@@ -661,6 +713,7 @@ internal static unsafe class DDrawHooks
     [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvStdcall) })]
     private static int PeekMessageAHook(IntPtr msg, IntPtr hwnd, uint filterMin, uint filterMax, uint remove)
     {
+        MapOverlay.Pump(OverlayW(), OverlayH());
         FlushPresent();
         var orig = (delegate* unmanaged[Stdcall]<IntPtr, IntPtr, uint, uint, uint, int>)_origPeekMessageA;
         return orig(msg, hwnd, filterMin, filterMax, remove);
@@ -669,6 +722,7 @@ internal static unsafe class DDrawHooks
     [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvStdcall) })]
     private static int GetMessageAHook(IntPtr msg, IntPtr hwnd, uint filterMin, uint filterMax)
     {
+        MapOverlay.Pump(OverlayW(), OverlayH());
         FlushPresent();
         var orig = (delegate* unmanaged[Stdcall]<IntPtr, IntPtr, uint, uint, int>)_origGetMessageA;
         return orig(msg, hwnd, filterMin, filterMax);
@@ -711,6 +765,8 @@ internal static unsafe class DDrawHooks
         ClientToScreen(_hwnd, ref origin);
 
         ContentRect(cw, ch, out var ox, out var oy, out var cwc, out var chc);
+        _contentW = cwc;
+        _contentH = chc;
         Rect dest;
         dest.left = origin.x + ox;
         dest.top = origin.y + oy;
@@ -747,13 +803,18 @@ internal static unsafe class DDrawHooks
             FillBars(&win, &dest);
         }
 
+        // The map overlay is composed with the frame first, so it reaches the screen in the same blit
+        var frame = ComposeMapOverlay();
+        var framePart = _framePart; // the scratch may be larger than the composed frame
+        var part = frame == _compose ? &framePart : null;
+
         var blt = (delegate* unmanaged[Stdcall]<IntPtr, Rect*, IntPtr, Rect*, uint, void*, int>)_origBlt;
-        var hr = blt(_primary, &dest, _offscreen, null, Blt.WAIT, null);
+        var hr = blt(_primary, &dest, frame, part, Blt.WAIT, null);
         if (hr == DDERR_SURFACELOST)
         {
             RestoreSurface(_primary);
-            RestoreSurface(_offscreen);
-            hr = blt(_primary, &dest, _offscreen, null, Blt.WAIT, null);
+            RestoreSurface(frame);
+            hr = blt(_primary, &dest, frame, part, Blt.WAIT, null);
         }
 
         if (_presentCount < 3 || hr != DD_OK)
@@ -762,6 +823,186 @@ internal static unsafe class DDrawHooks
         }
 
         _presentCount++;
+    }
+
+    private static void OverlaySize(out int w, out int h)
+    {
+        w = OverlayW();
+        h = OverlayH();
+    }
+
+    private const int ComposeScalePercent = 190;
+
+    private static int OverlayW() => ComposeSide(_renderW, _contentW, MaxComposeW);
+    private static int OverlayH() => ComposeSide(_renderH, _contentH, MaxComposeH);
+
+    private static int ComposeSide(int render, int content, int cap)
+    {
+        var ceiling = content > render ? Math.Min(content - 1, cap) : render;
+        return Math.Clamp(render * ComposeScalePercent / 100, render, Math.Max(render, ceiling));
+    }
+
+    private static IntPtr ComposeMapOverlay()
+    {
+        OverlaySize(out var composeW, out var composeH);
+        if (!MapOverlay.Prepare(composeW, composeH, _renderW, _renderH))
+        {
+            return _offscreen;
+        }
+
+        if (!EnsureComposeSurface(composeW, composeH))
+        {
+            return _offscreen;
+        }
+
+        var now = GetTickCount();
+        if (_composeValid && _framePart.right == composeW && _framePart.bottom == composeH &&
+            now - _composeTick < 1000 / ComposeHz)
+        {
+            return _compose;
+        }
+
+        // The surface can be larger than the frame, so every blit names its rectangle explicitly.
+        Rect frame;
+        frame.left = 0;
+        frame.top = 0;
+        frame.right = composeW;
+        frame.bottom = composeH;
+
+        // Let the driver stretch the scene straight into the composed frame,
+        // cheaper than reading back and scaling up in the composite
+        var blt = (delegate* unmanaged[Stdcall]<IntPtr, Rect*, IntPtr, Rect*, uint, void*, int>)_origBlt;
+        if (blt(_compose, &frame, _offscreen, null, Blt.WAIT, null) != DD_OK)
+        {
+            return _offscreen;
+        }
+
+        var bits = LockSurface(_compose, out var pitch);
+        if (bits == null)
+        {
+            return _offscreen;
+        }
+
+        MapOverlay.Composite(bits, pitch, composeW, composeH);
+        UnlockSurface(_compose);
+
+        _framePart = frame;
+        _composeTick = now;
+        _composeValid = true;
+        if (_overlayLogs < 3)
+        {
+            _overlayLogs++;
+            Log.Write($"MapOverlay: composed {composeW}x{composeH}, map {MapOverlay.ViewWidth}x{MapOverlay.ViewHeight} " +
+                      $"at ({MapOverlay.OffsetX},{MapOverlay.OffsetY}).");
+        }
+
+        return _compose;
+    }
+
+    // Direct pixel access to a system memory surface
+    private static byte* LockSurface(IntPtr surface, out int pitch)
+    {
+        pitch = 0;
+        var sd = stackalloc byte[SurfaceDesc.SIZE];
+        for (var i = 0; i < SurfaceDesc.SIZE; i++)
+        {
+            sd[i] = 0;
+        }
+
+        Write32(sd, SurfaceDesc.Offsets.dwSize, SurfaceDesc.SIZE);
+        var lockFn = (delegate* unmanaged[Stdcall]<IntPtr, Rect*, IntPtr, uint, IntPtr, int>)Slot(surface, Vtbl.Surface.Lock);
+        var hr = lockFn(surface, null, (IntPtr)sd, Lock.WAIT, IntPtr.Zero);
+        if (hr == DDERR_SURFACELOST)
+        {
+            RestoreSurface(surface);
+            hr = lockFn(surface, null, (IntPtr)sd, Lock.WAIT, IntPtr.Zero);
+        }
+
+        if (hr != DD_OK)
+        {
+            return null;
+        }
+
+        var bits = (byte*)(nint)Read32(sd, SurfaceDesc.Offsets.lpSurface);
+        pitch = (int)Read32(sd, SurfaceDesc.Offsets.lPitch);
+        if (bits != null && pitch > 0)
+        {
+            return bits;
+        }
+
+        // A surface left locked would stall every later blit.
+        UnlockSurface(surface);
+        return null;
+    }
+
+    private static void UnlockSurface(IntPtr surface) =>
+        ((delegate* unmanaged[Stdcall]<IntPtr, IntPtr, int>)Slot(surface, Vtbl.Surface.Unlock))(surface, IntPtr.Zero);
+
+    // One system memory surface the size of the presented frame
+    private static bool EnsureComposeSurface(int composeW, int composeH)
+    {
+        if (_overlaySurfacesFailed)
+        {
+            return false;
+        }
+
+        if (_compose == IntPtr.Zero || _composeW < composeW || _composeH < composeH)
+        {
+            ReleaseSurface(ref _compose);
+            _composeValid = false;
+            _composeW = Math.Max(_composeW, composeW);
+            _composeH = Math.Max(_composeH, composeH);
+            _compose = CreateOverlaySurface(_composeW, _composeH, true);
+        }
+
+        if (_compose == IntPtr.Zero)
+        {
+            _overlaySurfacesFailed = true;
+            Log.Write("MapOverlay: could not create its compositing surface -> overlay disabled.");
+            return false;
+        }
+
+        return true;
+    }
+
+    private static IntPtr CreateOverlaySurface(int w, int h, bool systemMemory)
+    {
+        if (_ddraw == IntPtr.Zero || _origCreateSurface == null || w <= 0 || h <= 0)
+        {
+            return IntPtr.Zero;
+        }
+
+        var desc = stackalloc byte[SurfaceDesc.SIZE];
+        for (var i = 0; i < SurfaceDesc.SIZE; i++)
+        {
+            desc[i] = 0;
+        }
+
+        Write32(desc, SurfaceDesc.Offsets.dwSize, SurfaceDesc.SIZE);
+        Write32(desc, SurfaceDesc.Offsets.dwFlags,
+            SurfaceDesc.Flags.CAPS | SurfaceDesc.Flags.WIDTH | SurfaceDesc.Flags.HEIGHT | SurfaceDesc.Flags.PIXELFORMAT);
+        Write32(desc, SurfaceDesc.Offsets.dwWidth, (uint)w);
+        Write32(desc, SurfaceDesc.Offsets.dwHeight, (uint)h);
+        Write32(desc, SurfaceDesc.Offsets.ddsCaps,
+            Caps.Flags.OFFSCREENPLAIN | (systemMemory ? Caps.Flags.SYSTEMMEMORY : 0));
+        WritePixelFormat(desc);
+
+        IntPtr surface;
+        var create = (delegate* unmanaged[Stdcall]<IntPtr, IntPtr, IntPtr*, IntPtr, int>)_origCreateSurface;
+        var hr = create(_ddraw, (IntPtr)desc, &surface, IntPtr.Zero);
+        Log.Write($"MapOverlay: {(systemMemory ? "bitmap" : "scratch")} surface {w}x{h} hr=0x{hr:X8}");
+        return hr == DD_OK ? surface : IntPtr.Zero;
+    }
+
+    private static void ReleaseSurface(ref IntPtr surface)
+    {
+        if (surface == IntPtr.Zero)
+        {
+            return;
+        }
+
+        ((delegate* unmanaged[Stdcall]<IntPtr, int>)Slot(surface, Vtbl.Surface.Release))(surface);
+        surface = IntPtr.Zero;
     }
 
     // Present an 8-bit palettized frame. Lock the offscreen, hand its indices plus the client's
@@ -1009,6 +1250,43 @@ internal static unsafe class DDrawHooks
         PostMessageA(hwnd, WM_KEYUP, VK_SHIFT, unchecked((int)0xC02A0001));
     }
 
+    // Release every key the client still believes is held on leaving focus
+    private static void ReleaseHeldKeys(IntPtr hwnd)
+    {
+        var state = stackalloc byte[VK_COUNT];
+        if (!GetKeyboardState(state))
+        {
+            return;
+        }
+
+        for (var vk = VK_FIRST_KEY; vk < VK_COUNT; vk++)
+        {
+            if ((state[vk] & 0x80) == 0)
+            {
+                continue;
+            }
+
+            var scan = MapVirtualKeyA((uint)vk, MAPVK_VK_TO_VSC);
+            var lParam = unchecked((int)(KEYUP_LPARAM | (scan << 16) | (IsExtendedKey(vk) ? KEY_EXTENDED : 0)));
+
+            // Alt arrives as a system key, and the client watches for it that way.
+            if (vk is VK_MENU or VK_LMENU or VK_RMENU)
+            {
+                PostMessageA(hwnd, WM_SYSKEYUP, vk, lParam);
+            }
+
+            PostMessageA(hwnd, WM_KEYUP, vk, lParam);
+        }
+    }
+
+    private static bool IsExtendedKey(int vk) => vk is
+        0x21 or 0x22 or 0x23 or 0x24 or // page up, page down, end, home
+        0x25 or 0x26 or 0x27 or 0x28 or // arrows
+        0x2C or 0x2D or 0x2E or // print screen, insert, delete
+        0x5B or 0x5C or 0x5D or // left win, right win, apps
+        0x6F or 0x90 or // numpad divide, num lock
+        0xA3 or VK_RMENU; // right control, right alt
+
     // Confine the OS cursor to the rendered content rectangle so it cannot enter the black bars.
     private static void ClipToContent()
     {
@@ -1131,9 +1409,19 @@ internal static unsafe class DDrawHooks
             return DefWindowProcA(hwnd, msg, wParam, lParam);
         }
 
-        if (msg == WM_KEYDOWN && RainOverlay.OnKeyDown(checked((int)wParam)))
+        if (msg == WM_KEYDOWN)
         {
-            return IntPtr.Zero;
+            var vk = checked((int)wParam);
+            if (RainOverlay.OnKeyDown(vk))
+            {
+                return IntPtr.Zero;
+            }
+
+            if (MapOverlay.OnKeyDown(vk, OverlayW(), OverlayH()))
+            {
+                Present();
+                return IntPtr.Zero;
+            }
         }
 
         // Repaint the client area from DirectDraw, so let the GDI background erase fall
@@ -1181,10 +1469,23 @@ internal static unsafe class DDrawHooks
             var activating = msg == WM_ACTIVATEAPP
                 ? wParam != IntPtr.Zero
                 : (checked((int)wParam) & 0xFFFF) != 0;
+            // WM_ACTIVATE and WM_ACTIVATEAPP both arrive for one focus change, so only act on a real transition
+            if (activating != _focused)
+            {
+                _focused = activating;
+                if (activating && ResetModifiersOnActivate)
+                {
+                    // safety net, reset common modifiers
+                    ResetModifiers(hwnd);
+                }
+                else
+                {
+                    ReleaseHeldKeys(hwnd);
+                }
+            }
+
             if (activating)
             {
-                // Reset modifiers to ensure the client receives the key-up
-                ResetModifiers(hwnd);
                 if (_borderless)
                 {
                     ClipToContent();

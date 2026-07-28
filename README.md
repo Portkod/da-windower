@@ -19,10 +19,12 @@ A C# windower for the Dark Ages client.
   No annoying video when starting the client.
 - [**Rainy weather (only for 7.41)**](#rainy-weather)
   Re-creates the rainy weather effect.
+- [**Map overlay (only for 7.41)**](#map-overlay)
+  View a scaled-down version of the current map.
 
-## Two ways to run it
+## Usage
 
-### 1. Injector — recommended for guaranteed early hooks
+### 1. Injector — recommended to enable all functionalty
 
 Use this to access all features.
 
@@ -54,7 +56,7 @@ first runs, which is after the client's early startup. Because of this, **multi-
 
 If you want these features you'll have to patch your game client by yourself.
 
-## Forwarding arguments to the game
+## Injector command-line arguments
 
 Any argument that is not a supported setting is forwarded verbatim to the game, so
 older clients can, for example, be given server info:
@@ -72,11 +74,12 @@ Usage: `--borderless=true` / `--borderless=false`, and a bare `--borderless` mea
  - `--lockaspect` (on by default)
  - `--cursorfix` (on by default, auto-limited by client)
  - `--rain` (off by default)
+ - `--map` (on by default, see [Map overlay](#map-overlay))
  - `--scale=<1-2>` (1 by default, see [Window scale](#window-scale))
  - `--exe <path>` (or `--exe=<path>`)
  - `--ignoreini`
 
-### Settings file (optional)
+## Settings file (optional)
 
 `DawndNet.ini` (next to the executable).
 
@@ -90,6 +93,7 @@ keepintro=false
 lockaspect=true
 cursorfix=true
 rain=false
+map=false
 scale=1
 #exe=C:\Dark Ages\Custom_Darkages.exe
 #args=127.0.0.1 2610
@@ -139,7 +143,10 @@ forces immediate present for every client.
 Re-implements the rainy weather effect through the newer snow particle system.
 Use F11 to force-toggle rain, or enter a rainy map.
 
-Referenced https://github.com/ewrogers/darkages-741-re for client specifications.
+### Map overlay
+***Only for client 7.41 and extremely experimental***
+
+Press **F2** for a scaled-down render of the current map.
 
 ## Build
 
@@ -161,3 +168,7 @@ dotnet publish src/Injector/Injector.csproj -c Release -r win-x86
 ```
 
 Add `-p:DAWND_LOG=false` to compile out all `OutputDebugString` calls.
+
+## Notes
+
+Referenced https://github.com/ewrogers/darkages-741-re for client specifications.

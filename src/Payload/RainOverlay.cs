@@ -2,6 +2,7 @@ using System;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using DawndNet.Shared;
+using static DawndNet.Payload.ClientMemory;
 using static DawndNet.Payload.Interop;
 using static DawndNet.Payload.Interop.Win32;
 
@@ -14,15 +15,17 @@ internal static unsafe class RainOverlay
 {
     private const bool Enable = true;
 
-    // Runtime gate, set once in Init.
+    // Config gate, set once in Init.
     private static bool _enabled;
+
+    // Set only once Init has confirmed a 7.41 client
+    private static bool _supported;
 
     private const bool EnableWeatherHook = true; // drive the client's weather session on mode 2
     private const bool EnableFallSpeed = true; // retune the session's own fall timer
     private const bool EnableStreakRedirect = true; // edit snowa sprites into rain streaks
 
     // 7.41 constants
-    private const uint PreferredBase = 0x400000;
     private const uint ApplyWeatherModeVa = 0x5f26c0; // map_apply_weather_mode() [thiscall, no args]
     private const uint CreateWeatherVa = 0x5c82c0; // render_create_snow_overlay() [thiscall, no args]
     private const uint ClearWeatherVa = 0x5c8380; // weather session reset (shared_ptr, +0x230=null)
@@ -31,9 +34,6 @@ internal static unsafe class RainOverlay
     private const uint ParticleCtorVa = 0x5bd710; // ui_snow_particle_pane_ctor(name,0) [thiscall, ret 8]
     private const uint EpfLoaderVa = 0x48b530; // file_load_image_frame(this,name,b,c,d) [thiscall]
     private const uint ArchiveReadVa = 0x472790; // file_archive_read_exact(entry,buf,size) [thiscall]
-
-    private const uint WorldImplGlobalVa = 0x73d964; // -> WorldPane + 0x2EC
-    private const int WorldImplOffset = 0x2ec;
 
     private const int PaneBlendModeOffset = 0x134;
     private const int ParticleBlendMode = 3; // drag-preview translucency; 1 = the opaque default
@@ -87,7 +87,6 @@ internal static unsafe class RainOverlay
         "..DDD..DDD.."
     };
 
-    private static IntPtr _moduleBase; // client image base, resolved in Init
     private static bool _forceActive; // set by hotkey
     private static void* _weatherTramp; // trampoline to the un-patched weather-mode dispatch
     private static bool _weatherInstalled;
@@ -129,12 +128,14 @@ internal static unsafe class RainOverlay
             return;
         }
 
-        _moduleBase = GetModuleHandleW(IntPtr.Zero);
+        ClientMemory.Init();
         if (!ClientSupported())
         {
             Log.Write("RainOverlay: hook-site signatures not matched -> disabled (unsupported client).");
             return;
         }
+
+        _supported = true;
 
         InstallWeatherHook();
         InstallStreakRedirect();
@@ -149,7 +150,7 @@ internal static unsafe class RainOverlay
     // Toggle rain
     public static bool OnKeyDown(int vk)
     {
-        if (!Enable || !_enabled || vk != ToggleVk)
+        if (!_supported || vk != ToggleVk)
         {
             return false;
         }
@@ -158,13 +159,6 @@ internal static unsafe class RainOverlay
         Log.Write($"RainOverlay hotkey -> force={_forceActive}");
         SyncWeatherSession(WorldPane());
         return true;
-    }
-
-    // WorldPane, or zero outside the world (title screen, map transfer, relog).
-    private static IntPtr WorldPane()
-    {
-        var impl = *(IntPtr*)(void*)Rebase(WorldImplGlobalVa);
-        return Plausible(impl) ? impl - WorldImplOffset : IntPtr.Zero;
     }
 
     // Read the client's own flag at WorldPane+0x264, which map_apply_weather_mode has already
@@ -179,9 +173,6 @@ internal static unsafe class RainOverlay
         var wp = WorldPane();
         return wp != IntPtr.Zero && *((byte*)wp + WeatherTypeOffset) == RainFlag;
     }
-
-    // range check for a user-space heap pointer to avoid crashes
-    private static bool Plausible(IntPtr p) => (nuint)p >= 0x10000 && (nuint)p < 0x7FFF0000;
 
     private static int SlotOf(byte* file)
     {
@@ -796,10 +787,6 @@ internal static unsafe class RainOverlay
 
     #region Inline hook helpers
 
-    // Resolved once in Init: StreakActive walks the WorldPane global on every timer tick and every
-    // snowa load, so this must not cost a P/Invoke.
-    private static IntPtr Rebase(uint va) => _moduleBase + (nint)(va - PreferredBase);
-
     private static bool ClientSupported() =>
         SiteHasBytes(ApplyWeatherModeVa, [0x55, 0x8B, 0xEC, 0x83, 0xEC, 0x14]) &&
         SiteHasBytes(CreateWeatherVa, [0x55, 0x8B, 0xEC, 0x6A, 0xFF]) &&
@@ -809,44 +796,6 @@ internal static unsafe class RainOverlay
         SiteHasBytes(ParticleCtorVa, [0x55, 0x8B, 0xEC, 0x6A, 0xFF]) &&
         SiteHasBytes(EpfLoaderVa, [0x55, 0x8B, 0xEC, 0x81, 0xEC, 0xD8, 0x00, 0x00, 0x00]) &&
         SiteHasBytes(ArchiveReadVa, [0x55, 0x8B, 0xEC, 0x51, 0x56]);
-
-    private static bool SiteHasBytes(uint va, ReadOnlySpan<byte> sig)
-    {
-        var p = (byte*)Rebase(va);
-
-        var mbi = stackalloc byte[28];
-        if (VirtualQuery(p, mbi, 28) != 28)
-        {
-            return false;
-        }
-
-        var regionBase = *(nuint*)(mbi + 0);
-        var regionSize = *(nuint*)(mbi + 12);
-        var state = *(uint*)(mbi + 16);
-        var protect = *(uint*)(mbi + 20);
-
-        // Committed, readable (not NOACCESS / GUARD / execute-only) and large enough to hold the signature.
-        const uint readable = 0x02 | 0x04 | 0x08 | 0x20 | 0x40 | 0x80; // R / RW / WC / XR / XRW / XWC
-        if (state != MEM_COMMIT || (protect & 0x100) != 0 || (protect & readable) == 0)
-        {
-            return false;
-        }
-
-        if ((nuint)p < regionBase || (nuint)sig.Length > regionBase + regionSize - (nuint)p)
-        {
-            return false;
-        }
-
-        for (var i = 0; i < sig.Length; i++)
-        {
-            if (p[i] != sig[i])
-            {
-                return false;
-            }
-        }
-
-        return true;
-    }
 
     // Minimal 5+ byte inline detour with a trampoline back to the stolen bytes.
     private static bool InstallInlineHook(IntPtr target, void* detour, int stolenLen, out void* trampoline)
