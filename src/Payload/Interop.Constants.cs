@@ -30,7 +30,6 @@ internal static partial class Interop
         public const uint WS_MAXIMIZEBOX = 0x00010000;
         public const uint WS_POPUP = 0x80000000;
         public const uint WS_VISIBLE = 0x10000000;
-        public const int CW_USEDEFAULT = unchecked((int)0x80000000);
 
         #endregion
 
@@ -101,6 +100,20 @@ internal static partial class Interop
         public const int VK_SHIFT = 0x10;
         public const int VK_CONTROL = 0x11;
         public const int VK_MENU = 0x12;
+        public const int VK_LMENU = 0xA4;
+        public const int VK_RMENU = 0xA5;
+
+        // The first virtual key that is a keyboard key
+        public const int VK_FIRST_KEY = 0x08;
+        public const int VK_COUNT = 0x100;
+
+        // virtual key -> scan code.
+        public const uint MAPVK_VK_TO_VSC = 0;
+
+        // Key-message lParam, repeat count 1, previous state down, transition up
+        // The scan code goes in bits 16-23 and the extended-key flag in bit 24
+        public const uint KEYUP_LPARAM = 0xC0000001;
+        public const uint KEY_EXTENDED = 1 << 24;
 
         #endregion
 
@@ -135,7 +148,6 @@ internal static partial class Interop
         {
             public const uint WAIT = 0x01000000;
             public const uint COLORFILL = 0x00000400;
-            public const uint KEYSRC = 0x00008000; // key off the source surface's set color key
         }
 
         /// <summary>
@@ -151,17 +163,7 @@ internal static partial class Interop
         /// </summary>
         public static class BltFast
         {
-            public const uint NOCOLORKEY = 0x00000000;
-            public const uint SRCCOLORKEY = 0x00000001;
             public const uint WAIT = 0x00000010;
-        }
-
-        /// <summary>
-        ///     SetColorKey() dwFlags. DDCKEY_SRCBLT keys the source of a blit.
-        /// </summary>
-        public static class ColorKey
-        {
-            public const uint SRCBLT = 0x00000001;
         }
 
         /// <summary>
@@ -180,7 +182,6 @@ internal static partial class Interop
                 public const uint HEIGHT = 0x00000002;
                 public const uint WIDTH = 0x00000004;
                 public const uint PIXELFORMAT = 0x00001000;
-                public const uint CKSRCBLT = 0x00004000; // ddckCKSrcBlt is valid
             }
 
             // ReSharper disable InconsistentNaming
@@ -197,8 +198,6 @@ internal static partial class Interop
                 public const int dwBackBufferCount = 0x14;
                 public const int lPitch = 0x10;
                 public const int lpSurface = 0x24;
-                public const int ckSrcBlt_low = 0x40; // ddckCKSrcBlt.dwColorSpaceLowValue
-                public const int ckSrcBlt_high = 0x44; // ddckCKSrcBlt.dwColorSpaceHighValue
                 public const int ddsCaps = 0x68;
                 public const int pf_dwSize = 0x48;
                 public const int pf_dwFlags = 0x4C;
@@ -291,6 +290,7 @@ internal static partial class Interop
             /// </summary>
             public static class Surface
             {
+                public const int Release = 0x08; // IUnknown
                 public const int Blt = 0x14;
                 public const int BltFast = 0x1C;
                 public const int Flip = 0x2C;
@@ -299,7 +299,6 @@ internal static partial class Interop
                 public const int Lock = 0x64;
                 public const int Unlock = 0x80;
                 public const int SetClipper = 0x70;
-                public const int SetColorKey = 0x74;
                 public const int SetPalette = 0x7C;
                 public const int GetSurfaceDesc = 0x58;
                 public const int Restore = 0x6C;

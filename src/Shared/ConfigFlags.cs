@@ -11,6 +11,7 @@ internal static class ConfigFlags
     public const uint LockAspect = 0x4;
     public const uint CursorFix = 0x8;
     public const uint Rain = 0x10;
+    public const uint Map = 0x20;
 
     // Window scale (integer multiple of the 640x480 render size)
     // stored as a small field rather than a bit so it can grow past the currently clamped 1-2 range.
