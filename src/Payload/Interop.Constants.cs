@@ -10,6 +10,7 @@ internal static partial class Interop
         #region Registry
 
         public const int ERROR_SUCCESS = 0;
+        public const uint REG_DWORD = 4;
 
         #endregion
 
