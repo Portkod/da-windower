@@ -29,6 +29,23 @@ internal static unsafe class Exports
     }
 
     /// <summary>
+    /// Early entry for proxy mode, called by the native shim in early.c
+    /// </summary>
+    [UnmanagedCallersOnly(EntryPoint = "DAWnd_EarlyInit", CallConvs = new[] { typeof(CallConvStdcall) })]
+    public static void DawndEarlyInit()
+    {
+        try
+        {
+            Log.Write("DAWnd_EarlyInit: installing hooks (proxy mode, pre-WinMain).");
+            DDrawHooks.InstallEarly();
+        }
+        catch
+        {
+            Log.Write("DAWnd_EarlyInit: unhandled exception during early install.");
+        }
+    }
+
+    /// <summary>
     /// Inject mode entry
     /// </summary>
     /// <param name="configParam"></param>

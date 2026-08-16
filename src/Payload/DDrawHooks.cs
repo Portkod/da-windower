@@ -128,6 +128,17 @@ internal static unsafe class DDrawHooks
             : "Inject mode: WARNING ddraw!DirectDrawCreate not found.");
     }
 
+    /// <summary>
+    /// Early entry, called from the native shim, proxy mode only in practice.
+    /// In inject mode DAWnd_Init has already run by the time the trampoline fires,
+    /// so both ResolveConfig and InstallAuxHooks no-op here.
+    /// </summary>
+    public static void InstallEarly()
+    {
+        ResolveConfig(IntPtr.Zero); // no injector word -> read ini
+        InstallAuxHooks();
+    }
+
     // Proxy entry. Forward to the real ddraw, then hook what it returns.
     public static int DirectDrawCreateProxy(IntPtr guid, IntPtr* ppDD, IntPtr outer)
     {
@@ -1605,18 +1616,40 @@ internal static unsafe class DDrawHooks
 
     #region Force legacy DisplayMode
 
+    // The client reads DisplayMode once, early in WinMain, and treats anything that is not 1
+    // (small window) or 2 (large window) as fullscreen. Always answer with a REG_DWORD 0.
     [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvStdcall) })]
     private static int RegQueryValueExAHook(IntPtr hKey, IntPtr valueName, IntPtr reserved, IntPtr type, IntPtr data, IntPtr cbData)
     {
         var orig = (delegate* unmanaged[Stdcall]<IntPtr, IntPtr, IntPtr, IntPtr, IntPtr, IntPtr, int>)_origRegQueryValueExA;
         var rc = orig(hKey, valueName, reserved, type, data, cbData);
-        if (rc == ERROR_SUCCESS && valueName != IntPtr.Zero && data != IntPtr.Zero &&
-            AnsiEqualsIgnoreCase((byte*)valueName, "DisplayMode"))
+        if (valueName == IntPtr.Zero || !AnsiEqualsIgnoreCase((byte*)valueName, "DisplayMode"))
         {
-            *(byte*)data = 0; // 0 == Fullscreen
+            return rc;
         }
 
-        return rc;
+        if (data != IntPtr.Zero && (cbData == IntPtr.Zero || *(uint*)cbData < sizeof(uint)))
+        {
+            return rc;
+        }
+
+        if (type != IntPtr.Zero)
+        {
+            *(uint*)type = REG_DWORD;
+        }
+
+        if (cbData != IntPtr.Zero)
+        {
+            *(uint*)cbData = sizeof(uint);
+        }
+
+        if (data != IntPtr.Zero)
+        {
+            *(uint*)data = 0; // 0 == Fullscreen
+        }
+
+        Log.Write($"DisplayMode: read answered as 0 (real rc={rc}).");
+        return ERROR_SUCCESS;
     }
 
     #endregion

@@ -24,37 +24,34 @@ A C# windower for the Dark Ages client.
 
 ## Usage
 
-### 1. Injector — recommended to enable all functionalty
+Used in one of two ways, as a proxy for DirectDraw or injected into the game's process at startup.
 
-Use this to access all features.
+### 1. DirectDraw proxy `ddraw.dll`
 
-```
-Darkages.exe
-DawndNet.exe     <- run this
-DawndNet.dll
-```
-
-### 2. Proxy `ddraw.dll` — no injection, AV-friendly
-
+No injection required and generally less hated by anti-virus software.
 The client imports `DirectDrawCreate` from `ddraw.dll`, so the payload can stand in as `ddraw.dll`.
-The game loads it itself through normal DLL search order.
-There is no need for the injector and no process injection at all.
-
-**Important**: The client's display mode must be set to `Full Screen Mode` using `DA-DisplaySelector.exe`.
+The game loads it through the normal DLL search order.
 
 ```
 Darkages.exe
-ddraw.dll        <- rename DawndNet.dll to this
+ddraw.dll        <- renamed DawndNet.dll
 DawndNet.ini     <- optional settings (see below)
 ```
 
 Run `Darkages.exe` normally. Options come from `DawndNet.ini`. See [Settings file](#settings-file-optional).
 
-**Limitations**: `DisplayMode` hooks install when `DirectDrawCreate`
-first runs, which is after the client's early startup. Because of this, **multi-instance** and
-**intro skip** will not function.
+### 2. Injector
 
-If you want these features you'll have to patch your game client by yourself.
+Launches the game and loads the payload itself. Useful when you want to pass arguments or pick a
+custom executable without an ini, or when something else already occupies `ddraw.dll`.
+Can be run from outside of the game's own folder.
+
+```
+Darkages.exe
+DawndNet.exe     <- run this
+DawndNet.dll
+DawndNet.ini     <- optional settings (see below)
+```
 
 ## Injector command-line arguments
 
@@ -141,7 +138,7 @@ forces immediate present for every client.
 ***Only for client 7.41***
 
 Re-implements the rainy weather effect through the newer snow particle system.
-Use F11 to force-toggle rain, or enter a rainy map.
+Use **F11** to force-toggle rain, or enter a rainy map.
 
 ### Map overlay
 ***Only for client 7.41 and extremely experimental***
@@ -151,6 +148,10 @@ Press **F2** for a scaled-down render of the current map.
 ## Build
 
 Requires the .NET 10 SDK and the Visual Studio C++ (x86) build tools. Everything is 32-bit because the client is a 32-bit process.
+
+The payload also contains one C file, `src/Payload/early.c`, which is compiled by the build and linked into `DawndNet.dll`.
+It exists because Native AOT does not run managed code while the DLL is loading, and the payload needs to install a few hooks before
+the game's `WinMain`. `vswhere.exe` must be on `PATH` so the build can find the x86 `cl.exe`, which the native link step already requires.
 
 Publish the whole solution:
 

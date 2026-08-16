@@ -5,10 +5,54 @@
     <NativeLib>Shared</NativeLib>
     <AssemblyName>DawndNet</AssemblyName>
     <RootNamespace>DawndNet.Payload</RootNamespace>
+    <EarlyShimSource>$(MSBuildProjectDirectory)\early.c</EarlyShimSource>
+    <EarlyShimObject>$(MSBuildProjectDirectory)\$(BaseIntermediateOutputPath)early.obj</EarlyShimObject>
   </PropertyGroup>
 
   <ItemGroup>
     <ProjectReference Include="..\Shared\Shared.csproj" />
   </ItemGroup>
+
+  <ItemGroup>
+    <NativeLibrary Include="$(EarlyShimObject)" />
+  </ItemGroup>
+
+  <Target Name="FindClExe">
+    <PropertyGroup>
+      <_VsWhere>$([System.Environment]::GetFolderPath(SpecialFolder.ProgramFilesX86))\Microsoft Visual Studio\Installer\vswhere.exe</_VsWhere>
+    </PropertyGroup>
+
+    <Error Condition="!Exists('$(_VsWhere)')"
+           Text="vswhere.exe not found at '$(_VsWhere)'. Visual Studio C++ build tools are required to compile early.c." />
+
+    <Exec Command="&quot;$(_VsWhere)&quot; -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath"
+          ConsoleToMSBuild="true" StandardOutputImportance="low">
+      <Output TaskParameter="ConsoleOutput" PropertyName="_VsInstallPath" />
+    </Exec>
+
+    <ItemGroup>
+      <_ClCandidate Include="$(_VsInstallPath)\VC\Tools\MSVC\*\bin\Hostx64\x86\cl.exe" />
+      <_ClCandidate Include="$(_VsInstallPath)\VC\Tools\MSVC\*\bin\Hostx86\x86\cl.exe" />
+    </ItemGroup>
+
+    <PropertyGroup>
+      <_ClExe>%(_ClCandidate.FullPath)</_ClExe>
+    </PropertyGroup>
+
+    <Error Condition="'$(_ClExe)' == ''"
+           Text="No x86 cl.exe found under '$(_VsInstallPath)'. Install the MSVC x86 build tools." />
+  </Target>
+
+  <Target Name="CompileEarlyShim"
+          DependsOnTargets="FindClExe"
+          BeforeTargets="LinkNative"
+          Inputs="$(EarlyShimSource)"
+          Outputs="$(EarlyShimObject)">
+    <MakeDir Directories="$(MSBuildProjectDirectory)\$(BaseIntermediateOutputPath)" />
+    <Message Importance="high" Text="Compiling early-init shim: early.c -> $(EarlyShimObject)" />
+    <Exec Command="&quot;$(_ClExe)&quot; /nologo /c /O1 /GS- /W4 /Zl /Fo&quot;$(EarlyShimObject)&quot; &quot;$(EarlyShimSource)&quot;"
+          WorkingDirectory="$(MSBuildProjectDirectory)"
+          StandardOutputImportance="low" />
+  </Target>
 
 </Project>
