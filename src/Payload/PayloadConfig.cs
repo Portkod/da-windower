@@ -19,7 +19,9 @@ internal readonly struct PayloadConfig
     public bool CursorFix { get; private init; }
     public bool Rain { get; private init; }
     public bool Map { get; private init; }
+    public bool Glyphs { get; private init; }
     public int Scale { get; private init; }
+    public int ScalingMode { get; private init; }
 
     public static PayloadConfig Resolve(IntPtr configParam)
     {
@@ -32,7 +34,7 @@ internal readonly struct PayloadConfig
         var cfg = From(WindowerOptions.FromFlags(flags));
         Log.Write($"Config (injector): borderless={cfg.BorderlessRequested} skipIntro={cfg.SkipIntro} " +
                   $"lockAspect={cfg.LockAspectRatio} cursorFix={cfg.CursorFix} rain={cfg.Rain} map={cfg.Map} " +
-                  $"scale={cfg.Scale}");
+                  $"glyphs={cfg.Glyphs} scale={cfg.Scale} scalingMode={cfg.ScalingMode}");
         return cfg;
     }
 
@@ -58,7 +60,8 @@ internal readonly struct PayloadConfig
                 var loaded = From(options);
                 Log.Write($"Config ({ConfigFlags.SettingsFile}): borderless={loaded.BorderlessRequested} " +
                           $"skipIntro={loaded.SkipIntro} lockAspect={loaded.LockAspectRatio} cursorFix={loaded.CursorFix} " +
-                          $"rain={loaded.Rain} map={loaded.Map} scale={loaded.Scale}");
+                          $"rain={loaded.Rain} map={loaded.Map} glyphs={loaded.Glyphs} scale={loaded.Scale} " +
+                          $"scalingMode={loaded.ScalingMode}");
                 return loaded;
             }
         }
@@ -74,7 +77,9 @@ internal readonly struct PayloadConfig
         CursorFix = o.CursorFix,
         Rain = o.Rain,
         Map = o.Map,
+        Glyphs = o.Glyphs,
         Scale = o.Scale,
+        ScalingMode = o.ScalingMode,
     };
 
     private static unsafe string? GameDirectory()

@@ -73,6 +73,15 @@ internal static unsafe partial class Interop
     [DefaultDllImportSearchPaths(DllImportSearchPath.System32)]
     public static partial int SetStretchBltMode(IntPtr hdc, int mode);
 
+    [LibraryImport("user32")]
+    [DefaultDllImportSearchPaths(DllImportSearchPath.System32)]
+    public static partial IntPtr MonitorFromWindow(IntPtr hwnd, uint dwFlags);
+
+    [LibraryImport("user32")]
+    [DefaultDllImportSearchPaths(DllImportSearchPath.System32)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    public static partial bool GetMonitorInfoA(IntPtr hMonitor, void* lpmi);
+
     [LibraryImport("gdi32")]
     [DefaultDllImportSearchPaths(DllImportSearchPath.System32)]
     public static partial int StretchDIBits(IntPtr hdc,
@@ -163,6 +172,42 @@ internal static unsafe partial class Interop
     [LibraryImport("kernel32")]
     [DefaultDllImportSearchPaths(DllImportSearchPath.System32)]
     public static partial uint GetSystemDirectoryA(byte* lpBuffer, uint uSize);
+
+    [LibraryImport("kernel32")]
+    [DefaultDllImportSearchPaths(DllImportSearchPath.System32)]
+    public static partial IntPtr GlobalAlloc(uint uFlags, uint dwBytes);
+
+    // GetTickCount only moves in 15.6ms steps by default, too coarse to pace presents against.
+    [LibraryImport("kernel32")]
+    [DefaultDllImportSearchPaths(DllImportSearchPath.System32)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    public static partial bool QueryPerformanceCounter(long* lpPerformanceCount);
+
+    [LibraryImport("kernel32")]
+    [DefaultDllImportSearchPaths(DllImportSearchPath.System32)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    public static partial bool QueryPerformanceFrequency(long* lpFrequency);
+
+    [LibraryImport("kernel32")]
+    [DefaultDllImportSearchPaths(DllImportSearchPath.System32)]
+    public static partial void* GlobalLock(IntPtr hMem);
+
+    [LibraryImport("kernel32")]
+    [DefaultDllImportSearchPaths(DllImportSearchPath.System32)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    public static partial bool GlobalUnlock(IntPtr hMem);
+
+    [LibraryImport("kernel32")]
+    [DefaultDllImportSearchPaths(DllImportSearchPath.System32)]
+    public static partial IntPtr GlobalFree(IntPtr hMem);
+
+    // lpDefaultChar / lpUsedDefaultChar are left null, so unmappable characters
+    // become the code page's own replacement byte.
+    [LibraryImport("kernel32")]
+    [DefaultDllImportSearchPaths(DllImportSearchPath.System32)]
+    public static partial int WideCharToMultiByte(uint codePage, uint dwFlags,
+        char* lpWideCharStr, int cchWideChar, byte* lpMultiByteStr, int cbMultiByte,
+        IntPtr lpDefaultChar, IntPtr lpUsedDefaultChar);
 
     #endregion
 

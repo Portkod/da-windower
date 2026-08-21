@@ -22,6 +22,19 @@ internal static partial class Interop
         public const uint MEM_COMMIT = 0x1000;
         public const uint MEM_RESERVE = 0x2000;
 
+        // Clipboard data must be movable so the clipboard owner can relocate it.
+        public const uint GMEM_MOVEABLE = 0x0002;
+        public const uint GMEM_ZEROINIT = 0x0040;
+
+        #endregion
+
+        #region Clipboard formats / code pages
+
+        public const uint CF_TEXT = 1;
+        public const uint CF_UNICODETEXT = 13;
+
+        public const uint CP_KOREAN = 949;
+
         #endregion
 
         #region Window styles
@@ -68,6 +81,7 @@ internal static partial class Interop
         public const uint WM_SIZING = 0x0214; // drag-resize in progress. lParam is the proposed Rect
         public const uint WM_KEYDOWN = 0x0100;
         public const uint WM_KEYUP = 0x0101;
+        public const uint WM_SYSKEYDOWN = 0x0104; // a key pressed while Alt is held
         public const uint WM_SYSKEYUP = 0x0105;
         public const uint WM_SYSCHAR = 0x0106;
         public const uint WM_MENUCHAR = 0x0120;
@@ -97,6 +111,8 @@ internal static partial class Interop
 
         #region Virtual-key codes
 
+        public const int VK_RETURN = 0x0D;
+
         // Modifiers, for clearing stuck state after Alt-Tab.
         public const int VK_SHIFT = 0x10;
         public const int VK_CONTROL = 0x11;
@@ -116,6 +132,9 @@ internal static partial class Interop
         public const uint KEYUP_LPARAM = 0xC0000001;
         public const uint KEY_EXTENDED = 1 << 24;
 
+        // Set when Alt was held as the key went down.
+        public const uint KEY_ALT_DOWN = 1 << 29;
+
         #endregion
 
         #region GDI
@@ -123,6 +142,16 @@ internal static partial class Interop
         public const uint DIB_RGB_COLORS = 0;
         public const uint SRCCOPY = 0x00CC0020;
         public const int COLORONCOLOR = 3;
+
+        #endregion
+
+        #region Monitors
+
+        public const uint MONITOR_DEFAULTTONEAREST = 2;
+
+        // MONITORINFO: cbSize, rcMonitor, rcWork, dwFlags
+        public const int MONITORINFO_SIZE = 40;
+        public const int MONITORINFO_RCMONITOR = 4;
 
         #endregion
     }

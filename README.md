@@ -10,17 +10,14 @@ A C# windower for the Dark Ages client.
   Drag-resizing is aspect-locked (configurable) and magnet-snaps to integer scales (1×/2×/3×…)
   when the drag lands near one, for crisper rendering.
 - [**Borderless fullscreen**](#borderless-fullscreen)
-  Run the game in a 4:3 letterboxed fullscreen mode.
-- **Multi-instance**
-  Run several clients at once.
 - [**Flickering cursor fix**](#cursor-flicker-fix)
   No more flickering cursor in 5.x and later clients.
-- [**Intro skip**](#intro-video-skipped-by-default)
-  No annoying video when starting the client.
 - [**Rainy weather (only for 7.41)**](#rainy-weather)
   Re-creates the rainy weather effect.
 - [**Map overlay (only for 7.41)**](#map-overlay)
   View a scaled-down version of the current map.
+- **Multi-instance**
+- [**Intro skip**](#intro-video-skipped-by-default)
 
 ## Usage
 
@@ -73,6 +70,7 @@ Usage: `--borderless=true` / `--borderless=false`, and a bare `--borderless` mea
  - `--rain` (off by default)
  - `--map` (on by default, see [Map overlay](#map-overlay))
  - `--scale=<1-2>` (1 by default, see [Window scale](#window-scale))
+ - `--scalingmode=<0-1>` (0 by default, see [Scaling mode](#scaling-mode))
  - `--exe <path>` (or `--exe=<path>`)
  - `--ignoreini`
 
@@ -92,6 +90,7 @@ cursorfix=true
 rain=false
 map=false
 scale=1
+scalingmode=0
 #exe=C:\Dark Ages\Custom_Darkages.exe
 #args=127.0.0.1 2610
 ```
@@ -108,9 +107,31 @@ scale=1
 
 ### Borderless fullscreen
 
-The window becomes a caption-less popup filling the primary monitor, and the 640x480
-image is centered and scaled up preserving its 4:3 aspect ratio, with black bars on
-the sides.
+The window becomes a caption-less popup filling the monitor the client opened on, and
+the 640x480 image is centered and scaled up preserving its 4:3 aspect ratio, with black
+bars on the sides. How the image is scaled into that rectangle is set by
+[`scalingmode`](#scaling-mode).
+
+**`Alt+Enter` toggles it at runtime**, whichever way `borderless` started. Going
+borderless remembers the window's frame and returns it there; if the client started
+borderless there is nothing to restore, so the first toggle out builds a window at the
+configured [`scale`](#window-scale) and centres it on the monitor. The key is swallowed,
+so the client never sees it.
+
+The toggle only applies once the windower has taken over the client's fullscreen. A
+client already running in its own native windowed mode keeps its own frame, and
+`Alt+Enter` does nothing.
+
+### Scaling mode
+
+`scalingmode` picks how the 640x480 image is fitted.
+
+| `scalingmode` | Name      | Behaviour |
+| ------------- | --------- | --------- |
+| `0`           | `fill`    | Aspect-preserved and as large as fits, point sampled. Default. |
+| `1`           | `integer` | The largest whole multiple that fits, black bars on all four sides. |
+
+The names are accepted in place of the numbers, so `scalingmode=integer` also works.
 
 ### Intro video
 
