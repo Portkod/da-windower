@@ -69,6 +69,10 @@ internal static unsafe class DDrawHooks
     private static bool _presentPending; // a composed frame is waiting to be shown
     private static int _flushCount;
 
+    private const int PresentHz = 60;
+    private static long _qpcFrequency; // -1 once found unavailable
+    private static long _lastPresentQpc;
+
     private static IntPtr _ddraw;
     private static IntPtr _hwnd;
     private static IntPtr _offscreen;
@@ -109,8 +113,18 @@ internal static unsafe class DDrawHooks
     private static bool _borderless;
     private static bool _borderlessRequested;
 
+    // How the render is fitted into the content rectangle, one of WindowerOptions.Scaling*.
+    private static int _scalingMode = WindowerOptions.ScalingFill;
+
+    // Where the window sat before Alt+Enter took it borderless, so leaving puts it back.
+    private static Rect _windowedRect;
+    private static bool _windowedRectValid;
+
     // Skip the intro video by forcing Bink to only play 1 frame
     private static bool _skipIntro = true;
+
+    // Unlock the font's double-byte glyphs and let the clipboard carry text into them.
+    private static bool _glyphs;
     private static bool _configResolved;
     private static void* _origBinkOpen;
 
@@ -176,7 +190,9 @@ internal static unsafe class DDrawHooks
         _cursorFix = cfg.CursorFix;
         _rain = cfg.Rain;
         _map = cfg.Map;
+        _glyphs = cfg.Glyphs;
         _startScale = cfg.Scale;
+        _scalingMode = cfg.ScalingMode;
     }
 
     [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvStdcall) })]
@@ -234,6 +250,8 @@ internal static unsafe class DDrawHooks
 
         _auxInstalled = true;
         var image = GetModuleHandleW(IntPtr.Zero);
+
+        WideGlyphs.Init(_glyphs);
 
         if (EnableMultiInstance)
         {
@@ -657,29 +675,39 @@ internal static unsafe class DDrawHooks
         return orig(thisPtr, targetOverride, flags);
     }
 
-    // The area of the client rect the frame is drawn into. Normally the whole client (stretch to fill).
-    // In borderless it is centered and aspect-preserved (4:3), with the remainder left for black bars.
+    // The area of the client rect the frame is drawn into.
+    // Integer scaling snaps to a whole multiple of the render size, leaving bars on all four sides.
+    // With borderless the frame is centered and aspect-preserved (bars on two sides)
+    // Window fills the whole client area
     private static void ContentRect(int cw, int ch, out int ox, out int oy, out int cwOut, out int chOut)
     {
-        if (!_borderless)
+        if (_scalingMode == WindowerOptions.ScalingInteger)
+        {
+            var multiple = Math.Min(cw / _renderW, ch / _renderH);
+            cwOut = multiple >= 1 ? _renderW * multiple : cw;
+            chOut = multiple >= 1 ? _renderH * multiple : ch;
+        }
+        else if (_borderless)
+        {
+            var widthAtFullHeight = ch * _renderW / _renderH;
+            if (widthAtFullHeight <= cw)
+            {
+                cwOut = widthAtFullHeight;
+                chOut = ch;
+            }
+            else
+            {
+                cwOut = cw;
+                chOut = cw * _renderH / _renderW;
+            }
+        }
+        else
         {
             ox = 0;
             oy = 0;
             cwOut = cw;
             chOut = ch;
             return;
-        }
-
-        var widthAtFullHeight = ch * _renderW / _renderH;
-        if (widthAtFullHeight <= cw)
-        {
-            cwOut = widthAtFullHeight;
-            chOut = ch;
-        }
-        else
-        {
-            cwOut = cw;
-            chOut = cw * _renderH / _renderW;
         }
 
         ox = (cw - cwOut) / 2;
@@ -702,11 +730,46 @@ internal static unsafe class DDrawHooks
         _presentPending = true;
     }
 
+    // Ticks per second, or -1 when the counter is unavailable. Queried once.
+    private static long QpcFrequency()
+    {
+        if (_qpcFrequency == 0)
+        {
+            long frequency;
+            _qpcFrequency = QueryPerformanceFrequency(&frequency) && frequency > 0 ? frequency : -1;
+        }
+
+        return _qpcFrequency;
+    }
+
+    private static bool PresentGateOpen()
+    {
+        var frequency = QpcFrequency();
+        if (frequency < 0)
+        {
+            return true; // no usable timer, never hold a frame back
+        }
+
+        long now;
+        if (!QueryPerformanceCounter(&now))
+        {
+            return true;
+        }
+
+        if (now - _lastPresentQpc < frequency / PresentHz)
+        {
+            return false;
+        }
+
+        _lastPresentQpc = now;
+        return true;
+    }
+
     // Show the pending frame, if any. Called between finished frames, so the frame we
     // present is always complete (never a half-composed one with the cursor mid-draw).
     private static void FlushPresent()
     {
-        if (!_presentPending)
+        if (!_presentPending || !PresentGateOpen())
         {
             return;
         }
@@ -784,27 +847,9 @@ internal static unsafe class DDrawHooks
         dest.right = dest.left + cwc;
         dest.bottom = dest.top + chc;
 
-        // 8-bit clients: DirectDraw will not convert palettized -> RGB on the present
-        // blit (it succeeds and draws nothing), so go through GDI, which does the
-        // palette lookup and the stretch for us.
-        if (_renderBpp == 8)
-        {
-            if (_borderless)
-            {
-                Rect winB;
-                winB.left = origin.x;
-                winB.top = origin.y;
-                winB.right = origin.x + cw;
-                winB.bottom = origin.y + ch;
-                FillBars(&winB, &dest);
-            }
-
-            PresentPalettized(ox, oy, cwc, chc);
-            _presentCount++;
-            return;
-        }
-
-        if (_borderless)
+        // Bars show wherever the content does not cover the client area.
+        // The borderless letterbox, and integer scaling in any window that is not a whole multiple of the render.
+        if (ox > 0 || oy > 0)
         {
             Rect win;
             win.left = origin.x;
@@ -812,6 +857,16 @@ internal static unsafe class DDrawHooks
             win.right = origin.x + cw;
             win.bottom = origin.y + ch;
             FillBars(&win, &dest);
+        }
+
+        // 8-bit clients: DirectDraw will not convert palettized -> RGB on the present
+        // blit (it succeeds and draws nothing), so go through GDI, which does the
+        // palette lookup and the stretch for us.
+        if (_renderBpp == 8)
+        {
+            PresentPalettized(ox, oy, cwc, chc);
+            _presentCount++;
+            return;
         }
 
         // The map overlay is composed with the frame first, so it reaches the screen in the same blit
@@ -946,8 +1001,14 @@ internal static unsafe class DDrawHooks
         return null;
     }
 
-    private static void UnlockSurface(IntPtr surface) =>
-        ((delegate* unmanaged[Stdcall]<IntPtr, IntPtr, int>)Slot(surface, Vtbl.Surface.Unlock))(surface, IntPtr.Zero);
+    // The offscreen's Unlock is hooked and would present recursively, so it goes to the original.
+    private static void UnlockSurface(IntPtr surface)
+    {
+        var unlock = surface == _offscreen
+            ? (delegate* unmanaged[Stdcall]<IntPtr, IntPtr, int>)_origUnlock
+            : (delegate* unmanaged[Stdcall]<IntPtr, IntPtr, int>)Slot(surface, Vtbl.Surface.Unlock);
+        unlock(surface, IntPtr.Zero);
+    }
 
     // One system memory surface the size of the presented frame
     private static bool EnsureComposeSurface(int composeW, int composeH)
@@ -1203,13 +1264,7 @@ internal static unsafe class DDrawHooks
 
         if (_borderless)
         {
-            // Borderless fullscreen, a caption-less popup filling the primary monitor.
-            var sw = GetSystemMetrics(SM_CXSCREEN);
-            var sh = GetSystemMetrics(SM_CYSCREEN);
-            _ = SetWindowLongA(hwnd, GWL_STYLE, unchecked((int)(WS_POPUP | WS_VISIBLE)));
-            SetWindowPos(hwnd, IntPtr.Zero, 0, 0, sw, sh,
-                SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED);
-            Log.Write($"Borderless fullscreen window {sw}x{sh}.");
+            ApplyBorderless(hwnd);
         }
         else if (sizeToRender)
         {
@@ -1250,6 +1305,96 @@ internal static unsafe class DDrawHooks
         {
             ClipToContent();
         }
+    }
+
+    private static void ApplyBorderless(IntPtr hwnd)
+    {
+        MonitorBounds(hwnd, out var mx, out var my, out var sw, out var sh);
+        _ = SetWindowLongA(hwnd, GWL_STYLE, unchecked((int)(WS_POPUP | WS_VISIBLE)));
+        SetWindowPos(hwnd, IntPtr.Zero, mx, my, sw, sh,
+            SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED);
+        Log.Write($"Borderless fullscreen window {sw}x{sh} at ({mx},{my}).");
+    }
+
+    // Alt+Enter switches between borderless fullscreen and a normal resizable window
+    private static void ToggleBorderless(IntPtr hwnd)
+    {
+        if (!_engaged || hwnd == IntPtr.Zero || !_windowFixed)
+        {
+            return;
+        }
+
+        if (!_borderless)
+        {
+            // Remember the frame before replacing it, so coming back lands in the same place.
+            _windowedRectValid = GetWindowRect(hwnd, out _windowedRect);
+            _borderless = true;
+            ApplyBorderless(hwnd);
+            ClipToContent();
+        }
+        else
+        {
+            _borderless = false;
+
+            ClipCursor(null);
+            _ = SetWindowLongA(hwnd, GWL_STYLE, unchecked((int)(WS_OVERLAPPEDWINDOW | WS_VISIBLE)));
+
+            var frame = _windowedRect;
+            if (!_windowedRectValid)
+            {
+                var scale = _startScale > 0 ? _startScale : 1;
+                frame.left = 0;
+                frame.top = 0;
+                frame.right = _renderW * scale;
+                frame.bottom = _renderH * scale;
+                AdjustWindowRectEx(ref frame, WS_OVERLAPPEDWINDOW, false, 0);
+
+                MonitorBounds(hwnd, out var mx, out var my, out var sw, out var sh);
+                var width = frame.right - frame.left;
+                var height = frame.bottom - frame.top;
+                frame.left = mx + (sw - width) / 2;
+                frame.top = my + (sh - height) / 2;
+                frame.right = frame.left + width;
+                frame.bottom = frame.top + height;
+            }
+
+            SetWindowPos(hwnd, IntPtr.Zero, frame.left, frame.top,
+                frame.right - frame.left, frame.bottom - frame.top,
+                SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED);
+            Log.Write($"Windowed {frame.right - frame.left}x{frame.bottom - frame.top} " +
+                      $"at ({frame.left},{frame.top}).");
+        }
+
+        Present();
+    }
+
+    private static void MonitorBounds(IntPtr hwnd, out int x, out int y, out int w, out int h)
+    {
+        var mi = stackalloc byte[MONITORINFO_SIZE];
+        for (var i = 0; i < MONITORINFO_SIZE; i++)
+        {
+            mi[i] = 0;
+        }
+
+        Write32(mi, 0, MONITORINFO_SIZE); // cbSize
+        var monitor = MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST);
+        if (monitor != IntPtr.Zero && GetMonitorInfoA(monitor, mi))
+        {
+            var r = (Rect*)(mi + MONITORINFO_RCMONITOR);
+            x = r->left;
+            y = r->top;
+            w = r->right - r->left;
+            h = r->bottom - r->top;
+            if (w > 0 && h > 0)
+            {
+                return;
+            }
+        }
+
+        x = 0;
+        y = 0;
+        w = GetSystemMetrics(SM_CXSCREEN);
+        h = GetSystemMetrics(SM_CYSCREEN);
     }
 
     // Post the key-up events the game missed while it was out of focus during Alt-Tab,
@@ -1418,6 +1563,17 @@ internal static unsafe class DDrawHooks
         if (_selfMinimizing)
         {
             return DefWindowProcA(hwnd, msg, wParam, lParam);
+        }
+
+        if ((msg == WM_SYSKEYDOWN || msg == WM_SYSKEYUP) && checked((int)wParam) == VK_RETURN &&
+            ((uint)lParam & KEY_ALT_DOWN) != 0)
+        {
+            if (msg == WM_SYSKEYDOWN)
+            {
+                ToggleBorderless(hwnd);
+            }
+
+            return IntPtr.Zero;
         }
 
         if (msg == WM_KEYDOWN)

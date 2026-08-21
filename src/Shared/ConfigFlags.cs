@@ -12,11 +12,15 @@ internal static class ConfigFlags
     public const uint CursorFix = 0x8;
     public const uint Rain = 0x10;
     public const uint Map = 0x20;
+    public const uint Glyphs = 0x40;
 
     // Window scale (integer multiple of the 640x480 render size)
     // stored as a small field rather than a bit so it can grow past the currently clamped 1-2 range.
     public const int ScaleShift = 8;
     public const uint ScaleMask = 0xF00;
+
+    public const int ScalingModeShift = 12;
+    public const uint ScalingModeMask = 0x3000;
 
     public const string SettingsFile = "DawndNet.ini";
 }
