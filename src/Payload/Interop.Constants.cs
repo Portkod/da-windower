@@ -35,6 +35,9 @@ internal static partial class Interop
 
         public const uint CP_KOREAN = 949;
 
+        // Without this the converter substitutes lookalikes for characters the code page can't hold
+        public const uint WC_NO_BEST_FIT_CHARS = 0x0000_0400;
+
         #endregion
 
         #region Window styles
@@ -74,7 +77,10 @@ internal static partial class Interop
         public const uint WM_MOUSELAST_CLIENT = 0x0209; // WM_MBUTTONDBLCLK (0x20A WM_MOUSEWHEEL is screen space)
         public const uint WM_ERASEBKGND = 0x0014;
         public const uint WM_SIZE = 0x0005; // client size changed (incl. live-resize drag)
+        public const uint WM_MOVE = 0x0003; // client area moved on screen
         public const uint WM_PAINT = 0x000F; // an invalidated region needs repainting
+        public const uint WM_WINDOWPOSCHANGED = 0x0047; // position, size or z-order settled
+        public const uint WM_DISPLAYCHANGE = 0x007E; // resolution / depth / monitor layout changed
         public const uint WM_ACTIVATE = 0x0006; // LOWORD(wParam)==0 is WA_INACTIVE
         public const uint WM_ACTIVATEAPP = 0x001C; // wParam==0 is deactivating
         public const uint WM_NCMOUSEMOVE = 0x00A0; // mouse over the non-client area (borders/title)
@@ -143,6 +149,9 @@ internal static partial class Interop
         public const uint SRCCOPY = 0x00CC0020;
         public const int COLORONCOLOR = 3;
 
+        // GetClipBox: the DC has no visible region at all.
+        public const int NULLREGION = 1;
+
         #endregion
 
         #region Monitors
@@ -152,6 +161,27 @@ internal static partial class Interop
         // MONITORINFO: cbSize, rcMonitor, rcWork, dwFlags
         public const int MONITORINFO_SIZE = 40;
         public const int MONITORINFO_RCMONITOR = 4;
+
+        // MONITORINFOEXA appends szDevice[CCHDEVICENAME], the \\.\DISPLAYn name
+        // EnumDisplaySettings wants.
+        public const int MONITORINFOEX_SIZE = 72;
+        public const int MONITORINFOEX_SZDEVICE = 40;
+
+        // EnumDisplaySettings mode index for "whatever the monitor is running right now".
+        public const uint ENUM_CURRENT_SETTINGS = 0xFFFFFFFF;
+
+        // DEVMODEA, the pre-DEVMODE_5 layout (dmSize 156). Everything up to dmPanningHeight.
+        public const int DEVMODE_SIZE = 156;
+        public const int DEVMODE_DMSIZE = 36; // WORD, must be filled in before the call
+        public const int DEVMODE_DISPLAYFREQUENCY = 120; // DWORD, Hz
+
+        #endregion
+
+        #region Desktop Window Manager
+
+        // DwmGetWindowAttribute: nonzero when the window is composited but not shown anywhere
+        // (another virtual desktop, or a shell-hidden window). Not the same as invisible.
+        public const uint DWMWA_CLOAKED = 14;
 
         #endregion
     }
@@ -186,6 +216,10 @@ internal static partial class Interop
         public static class Lock
         {
             public const uint WAIT = 0x00000001;
+            public const uint READONLY = 0x00000010;
+            public const uint WRITEONLY = 0x00000020;
+            public const uint NOSYSLOCK = 0x00000800;
+            public const uint DISCARDCONTENTS = 0x00002000;
         }
 
         /// <summary>
