@@ -117,7 +117,7 @@ internal static unsafe class WideGlyphs
         try
         {
             // -1 measures and converts through the terminator, so the count covers it.
-            var bytes = WideCharToMultiByte(CP_KOREAN, 0, text, -1, null, 0, IntPtr.Zero, IntPtr.Zero);
+            var bytes = WideCharToMultiByte(CP_KOREAN, WC_NO_BEST_FIT_CHARS, text, -1, null, 0, IntPtr.Zero, IntPtr.Zero);
             if (bytes <= 0)
             {
                 return IntPtr.Zero;
@@ -136,7 +136,7 @@ internal static unsafe class WideGlyphs
                 return IntPtr.Zero;
             }
 
-            var written = WideCharToMultiByte(CP_KOREAN, 0, text, -1, dst, bytes, IntPtr.Zero, IntPtr.Zero);
+            var written = WideCharToMultiByte(CP_KOREAN, WC_NO_BEST_FIT_CHARS, text, -1, dst, bytes, IntPtr.Zero, IntPtr.Zero);
             GlobalUnlock(block);
 
             if (written <= 0)

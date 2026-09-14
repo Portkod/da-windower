@@ -82,6 +82,31 @@ internal static unsafe partial class Interop
     [return: MarshalAs(UnmanagedType.Bool)]
     public static partial bool GetMonitorInfoA(IntPtr hMonitor, void* lpmi);
 
+    [LibraryImport("user32")]
+    [DefaultDllImportSearchPaths(DllImportSearchPath.System32)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    public static partial bool EnumDisplaySettingsA(byte* lpszDeviceName, uint iModeNum, void* lpDevMode);
+
+    [LibraryImport("user32")]
+    [DefaultDllImportSearchPaths(DllImportSearchPath.System32)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    public static partial bool IsWindowVisible(IntPtr hWnd);
+
+    [LibraryImport("user32")]
+    [DefaultDllImportSearchPaths(DllImportSearchPath.System32)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    public static partial bool IsIconic(IntPtr hWnd);
+
+    [LibraryImport("gdi32")]
+    [DefaultDllImportSearchPaths(DllImportSearchPath.System32)]
+    public static partial int GetClipBox(IntPtr hdc, Rect* lprc);
+
+    // dwmapi is present from Vista on, but the payload runs inside very old clients, so every
+    // call site latches off on the first failure rather than assuming the import resolves
+    [LibraryImport("dwmapi")]
+    [DefaultDllImportSearchPaths(DllImportSearchPath.System32)]
+    public static partial int DwmGetWindowAttribute(IntPtr hwnd, uint dwAttribute, void* pvAttribute, uint cbAttribute);
+
     [LibraryImport("gdi32")]
     [DefaultDllImportSearchPaths(DllImportSearchPath.System32)]
     public static partial int StretchDIBits(IntPtr hdc,

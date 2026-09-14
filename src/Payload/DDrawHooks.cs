@@ -1,6 +1,8 @@
-using System;
+﻿using System;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
+using System.Runtime.Intrinsics;
+using System.Runtime.Intrinsics.X86;
 using System.Text;
 using DawndNet.Shared;
 using static DawndNet.Payload.Interop;
@@ -18,6 +20,9 @@ internal static unsafe class DDrawHooks
 
     // Forces the client's DisplayMode registry value to 0
     private const bool ForceLegacyDisplayMode = true;
+
+    // Expand the 16-bit colors manually instead of leaving it to DirectDraw
+    private const bool ExactColor = true;
 
     // Snap distance for exact integer scale resizing.
     private const int SnapPx = 32;
@@ -68,10 +73,35 @@ internal static unsafe class DDrawHooks
     private static IntPtr _origWndProc;
     private static bool _presentPending; // a composed frame is waiting to be shown
     private static int _flushCount;
-
-    private const int PresentHz = 60;
+    private const int PresentHzFallback = 60;
+    private const int PresentHzMin = 24;
+    private const int PresentHzMax = 480;
+    private const int PresentHzRecheckMs = 500;
+    private static int _presentHz = PresentHzFallback;
+    private static IntPtr _presentHzMonitor; // the monitor _presentHz was read from
+    private static uint _presentHzTick;
     private static long _qpcFrequency; // -1 once found unavailable
     private static long _lastPresentQpc;
+
+    private static bool _barsValid;
+    private static Rect _barsWin;
+    private static Rect _barsContent;
+    private static uint _barsTick;
+    private static int _barFills;
+    private const int BarRefreshMs = 1000; // self-heal interval for a dirtying we did not see
+
+    // Presents skipped because nothing of the window is on screen
+    private static int _hiddenSkips;
+    private static string _hiddenReason = "on screen";
+    private static bool _dwmUnavailable;
+
+    private const int StatsMs = 5000;
+    private static uint _statsTick;
+    private static int _statsPresents;
+    private static int _statsBarFills;
+    private static int _statsSkips;
+    private static string _statsSkipReason = "none";
+    private static int _statsPolls;
 
     private static IntPtr _ddraw;
     private static IntPtr _hwnd;
@@ -86,10 +116,20 @@ internal static unsafe class DDrawHooks
     private const int ComposeHz = 100;
     private static int _contentW, _contentH; // the size the frame is last known to be presented at
     private static Rect _framePart; // the part of the scratch the composed frame occupies
-    private const int MaxComposeW = 1920;
-    private const int MaxComposeH = 1440;
+    // Ceiling on the composed frame
+    private const int MaxComposeW = 2048;
+    private const int MaxComposeH = 1536;
     private static bool _overlaySurfacesFailed;
     private static int _overlayLogs;
+
+    // Exact-color present, the composed frame expanded to XRGB8888 the way the client does it.
+    private static IntPtr _present32;
+    private static int _present32W, _present32H;
+    private static bool _present32Failed;
+    private static uint _expandedTick; // the _composeTick the current expansion was made from
+    private static bool _expandedFromCompose;
+    private static int _expandedW, _expandedH;
+    private static int _expandLogs;
     private static bool _auxInstalled;
     private static bool _vtableHooked;
     private static bool _windowedReady;
@@ -444,10 +484,11 @@ internal static unsafe class DDrawHooks
         Write32(d, SurfaceDesc.Offsets.dwWidth, (uint)_renderW);
         Write32(d, SurfaceDesc.Offsets.dwHeight, (uint)_renderH);
         Write32(d, SurfaceDesc.Offsets.dwBackBufferCount, 0);
-        // 8-bit palettized surfaces are not reliably available in video memory on a 32-bit
-        // desktop. Pin them to system memory so the format request is honored, otherwise we
-        // silently get a 32-bit surface and the client's index writes land as near-black pixels.
-        Write32(d, SurfaceDesc.Offsets.ddsCaps, Caps.Flags.OFFSCREENPLAIN | (_renderBpp == 8 ? Caps.Flags.SYSTEMMEMORY : 0));
+        // 8-bit palettized surfaces are not reliably available in video memory on a 32-bit desktop.
+        // Pin them to system memory so the format request is honored, otherwise we silently get a 32-bit surface.
+        // ExactColor pins the 16-bit surface too, because it reads the finished frame back.
+        var pinToSystem = _renderBpp == 8 || (ExactColor && _renderBpp == 16);
+        Write32(d, SurfaceDesc.Offsets.ddsCaps, Caps.Flags.OFFSCREENPLAIN | (pinToSystem ? Caps.Flags.SYSTEMMEMORY : 0));
         WritePixelFormat(d);
 
         var hr = orig(thisPtr, lpDesc, ppSurface, outer);
@@ -742,6 +783,69 @@ internal static unsafe class DDrawHooks
         return _qpcFrequency;
     }
 
+    // The refresh rate of the monitor the window is on.
+    private static int PresentHz()
+    {
+        var now = GetTickCount();
+        if (_presentHzMonitor != IntPtr.Zero && now - _presentHzTick < PresentHzRecheckMs)
+        {
+            return _presentHz;
+        }
+
+        _presentHzTick = now;
+        var monitor = _hwnd != IntPtr.Zero ? MonitorFromWindow(_hwnd, MONITOR_DEFAULTTONEAREST) : IntPtr.Zero;
+        if (monitor == _presentHzMonitor)
+        {
+            return _presentHz;
+        }
+
+        _presentHzMonitor = monitor;
+        var hz = QueryRefreshHz(monitor);
+        if (hz != _presentHz)
+        {
+            _presentHz = hz;
+            Log.Write($"Present cap {hz}Hz (monitor 0x{monitor:X}).");
+        }
+
+        return _presentHz;
+    }
+
+    private static int QueryRefreshHz(IntPtr monitor)
+    {
+        if (monitor == IntPtr.Zero)
+        {
+            return PresentHzFallback;
+        }
+
+        var mi = stackalloc byte[MONITORINFOEX_SIZE];
+        for (var i = 0; i < MONITORINFOEX_SIZE; i++)
+        {
+            mi[i] = 0;
+        }
+
+        Write32(mi, 0, MONITORINFOEX_SIZE); // cbSize, the EX size is what selects szDevice
+        if (!GetMonitorInfoA(monitor, mi))
+        {
+            return PresentHzFallback;
+        }
+
+        var dm = stackalloc byte[DEVMODE_SIZE];
+        for (var i = 0; i < DEVMODE_SIZE; i++)
+        {
+            dm[i] = 0;
+        }
+
+        *(ushort*)(dm + DEVMODE_DMSIZE) = DEVMODE_SIZE;
+        if (!EnumDisplaySettingsA(mi + MONITORINFOEX_SZDEVICE, ENUM_CURRENT_SETTINGS, dm))
+        {
+            return PresentHzFallback;
+        }
+
+        // 0 and 1 both mean "the hardware default", i.e. the driver declined to answer.
+        var hz = (int)Read32(dm, DEVMODE_DISPLAYFREQUENCY);
+        return hz is >= PresentHzMin and <= PresentHzMax ? hz : PresentHzFallback;
+    }
+
     private static bool PresentGateOpen()
     {
         var frequency = QpcFrequency();
@@ -756,7 +860,7 @@ internal static unsafe class DDrawHooks
             return true;
         }
 
-        if (now - _lastPresentQpc < frequency / PresentHz)
+        if (now - _lastPresentQpc < frequency / PresentHz())
         {
             return false;
         }
@@ -787,7 +891,7 @@ internal static unsafe class DDrawHooks
     [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvStdcall) })]
     private static int PeekMessageAHook(IntPtr msg, IntPtr hwnd, uint filterMin, uint filterMax, uint remove)
     {
-        MapOverlay.Pump(OverlayW(), OverlayH());
+        _statsPolls++;
         FlushPresent();
         var orig = (delegate* unmanaged[Stdcall]<IntPtr, IntPtr, uint, uint, uint, int>)_origPeekMessageA;
         return orig(msg, hwnd, filterMin, filterMax, remove);
@@ -796,7 +900,7 @@ internal static unsafe class DDrawHooks
     [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvStdcall) })]
     private static int GetMessageAHook(IntPtr msg, IntPtr hwnd, uint filterMin, uint filterMax)
     {
-        MapOverlay.Pump(OverlayW(), OverlayH());
+        _statsPolls++;
         FlushPresent();
         var orig = (delegate* unmanaged[Stdcall]<IntPtr, IntPtr, uint, uint, int>)_origGetMessageA;
         return orig(msg, hwnd, filterMin, filterMax);
@@ -823,6 +927,24 @@ internal static unsafe class DDrawHooks
             return;
         }
 
+        ReportStats();
+
+        if (WindowHidden())
+        {
+            _barsValid = false;
+            if (_hiddenSkips < 3)
+            {
+                Log.Write($"Present skipped #{_hiddenSkips}, window is {_hiddenReason}.");
+            }
+
+            _hiddenSkips++;
+            _statsSkips++;
+            _statsSkipReason = _hiddenReason; // why we skipped, not what the window is doing now
+            return;
+        }
+
+        _statsPresents++;
+
         if (!GetClientRect(_hwnd, out var client))
         {
             return;
@@ -847,17 +969,7 @@ internal static unsafe class DDrawHooks
         dest.right = dest.left + cwc;
         dest.bottom = dest.top + chc;
 
-        // Bars show wherever the content does not cover the client area.
-        // The borderless letterbox, and integer scaling in any window that is not a whole multiple of the render.
-        if (ox > 0 || oy > 0)
-        {
-            Rect win;
-            win.left = origin.x;
-            win.top = origin.y;
-            win.right = origin.x + cw;
-            win.bottom = origin.y + ch;
-            FillBars(&win, &dest);
-        }
+        FillLetterbox(&origin, &dest, cw, ch, ox, oy);
 
         // 8-bit clients: DirectDraw will not convert palettized -> RGB on the present
         // blit (it succeeds and draws nothing), so go through GDI, which does the
@@ -869,10 +981,27 @@ internal static unsafe class DDrawHooks
             return;
         }
 
+        // Refresh the overlay's view of the client (cursor art, current map) once per drawn frame.
+        MapOverlay.Pump(OverlayW(), OverlayH());
+
         // The map overlay is composed with the frame first, so it reaches the screen in the same blit
         var frame = ComposeMapOverlay();
         var framePart = _framePart; // the scratch may be larger than the composed frame
-        var part = frame == _compose ? &framePart : null;
+        var fromCompose = frame == _compose;
+        var part = fromCompose ? &framePart : null;
+
+        // Expand to the desktop format ourselves so the driver never picks the expansion.
+        var frameW = fromCompose ? framePart.right : _renderW;
+        var frameH = fromCompose ? framePart.bottom : _renderH;
+        if (ExactColor && ExpandFrame(frame, frameW, frameH, fromCompose))
+        {
+            frame = _present32;
+            framePart.left = 0;
+            framePart.top = 0;
+            framePart.right = frameW;
+            framePart.bottom = frameH;
+            part = &framePart; // _present32 can be larger than the frame it holds
+        }
 
         var blt = (delegate* unmanaged[Stdcall]<IntPtr, Rect*, IntPtr, Rect*, uint, void*, int>)_origBlt;
         var hr = blt(_primary, &dest, frame, part, Blt.WAIT, null);
@@ -897,15 +1026,17 @@ internal static unsafe class DDrawHooks
         h = OverlayH();
     }
 
-    private const int ComposeScalePercent = 190;
-
     private static int OverlayW() => ComposeSide(_renderW, _contentW, MaxComposeW);
     private static int OverlayH() => ComposeSide(_renderH, _contentH, MaxComposeH);
 
     private static int ComposeSide(int render, int content, int cap)
     {
-        var ceiling = content > render ? Math.Min(content - 1, cap) : render;
-        return Math.Clamp(render * ComposeScalePercent / 100, render, Math.Max(render, ceiling));
+        if (content <= render)
+        {
+            return render; // presented at or below native size, nothing to compose up to
+        }
+
+        return content < cap ? content + 1 : Math.Max(render, Math.Min(content - 1, cap));
     }
 
     private static IntPtr ComposeMapOverlay()
@@ -966,7 +1097,11 @@ internal static unsafe class DDrawHooks
     }
 
     // Direct pixel access to a system memory surface
-    private static byte* LockSurface(IntPtr surface, out int pitch)
+    private static byte* LockSurface(IntPtr surface, out int pitch) => LockSurface(surface, out pitch, 0);
+
+    // extraFlags carries the access hints (READONLY / WRITEONLY / DISCARDCONTENTS)
+    // they cost nothing on a system-memory surface and save a round trip on one that is not
+    private static byte* LockSurface(IntPtr surface, out int pitch, uint extraFlags)
     {
         pitch = 0;
         var sd = stackalloc byte[SurfaceDesc.SIZE];
@@ -977,11 +1112,12 @@ internal static unsafe class DDrawHooks
 
         Write32(sd, SurfaceDesc.Offsets.dwSize, SurfaceDesc.SIZE);
         var lockFn = (delegate* unmanaged[Stdcall]<IntPtr, Rect*, IntPtr, uint, IntPtr, int>)Slot(surface, Vtbl.Surface.Lock);
-        var hr = lockFn(surface, null, (IntPtr)sd, Lock.WAIT, IntPtr.Zero);
+        var flags = Lock.WAIT | extraFlags;
+        var hr = lockFn(surface, null, (IntPtr)sd, flags, IntPtr.Zero);
         if (hr == DDERR_SURFACELOST)
         {
             RestoreSurface(surface);
-            hr = lockFn(surface, null, (IntPtr)sd, Lock.WAIT, IntPtr.Zero);
+            hr = lockFn(surface, null, (IntPtr)sd, flags, IntPtr.Zero);
         }
 
         if (hr != DD_OK)
@@ -1010,6 +1146,12 @@ internal static unsafe class DDrawHooks
         unlock(surface, IntPtr.Zero);
     }
 
+    // Scratch surfaces are sized to a grain rather than to the exact frame, so a resize drag
+    // reallocates once every 16 pixels of travel instead of on every frame.
+    private const int SurfaceGrain = 16;
+
+    private static int GrainUp(int v) => (v + SurfaceGrain - 1) / SurfaceGrain * SurfaceGrain;
+
     // One system memory surface the size of the presented frame
     private static bool EnsureComposeSurface(int composeW, int composeH)
     {
@@ -1018,26 +1160,31 @@ internal static unsafe class DDrawHooks
             return false;
         }
 
-        if (_compose == IntPtr.Zero || _composeW < composeW || _composeH < composeH)
+        var wantW = GrainUp(composeW);
+        var wantH = GrainUp(composeH);
+        if (_compose == IntPtr.Zero || _composeW != wantW || _composeH != wantH)
         {
-            ReleaseSurface(ref _compose);
-            _composeValid = false;
-            _composeW = Math.Max(_composeW, composeW);
-            _composeH = Math.Max(_composeH, composeH);
-            _compose = CreateOverlaySurface(_composeW, _composeH, true);
-        }
-
-        if (_compose == IntPtr.Zero)
-        {
-            _overlaySurfacesFailed = true;
-            Log.Write("MapOverlay: could not create its compositing surface -> overlay disabled.");
-            return false;
+            var next = CreateOverlaySurface(wantW, wantH, true);
+            if (next != IntPtr.Zero)
+            {
+                ReleaseSurface(ref _compose);
+                _compose = next;
+                _composeW = wantW;
+                _composeH = wantH;
+                _composeValid = false;
+            }
+            else if (_compose == IntPtr.Zero || _composeW < composeW || _composeH < composeH)
+            {
+                _overlaySurfacesFailed = true;
+                Log.Write("MapOverlay: could not create its compositing surface -> overlay disabled.");
+                return false;
+            }
         }
 
         return true;
     }
 
-    private static IntPtr CreateOverlaySurface(int w, int h, bool systemMemory)
+    private static IntPtr CreateOverlaySurface(int w, int h, bool systemMemory, bool xrgb32 = false)
     {
         if (_ddraw == IntPtr.Zero || _origCreateSurface == null || w <= 0 || h <= 0)
         {
@@ -1057,13 +1204,140 @@ internal static unsafe class DDrawHooks
         Write32(desc, SurfaceDesc.Offsets.dwHeight, (uint)h);
         Write32(desc, SurfaceDesc.Offsets.ddsCaps,
             Caps.Flags.OFFSCREENPLAIN | (systemMemory ? Caps.Flags.SYSTEMMEMORY : 0));
-        WritePixelFormat(desc);
+        if (xrgb32)
+        {
+            WriteXrgb8888(desc);
+        }
+        else
+        {
+            WritePixelFormat(desc);
+        }
 
         IntPtr surface;
         var create = (delegate* unmanaged[Stdcall]<IntPtr, IntPtr, IntPtr*, IntPtr, int>)_origCreateSurface;
         var hr = create(_ddraw, (IntPtr)desc, &surface, IntPtr.Zero);
-        Log.Write($"MapOverlay: {(systemMemory ? "bitmap" : "scratch")} surface {w}x{h} hr=0x{hr:X8}");
+        Log.Write($"{(xrgb32 ? "ExactColor" : "MapOverlay")}: {(systemMemory ? "bitmap" : "scratch")} surface {w}x{h} hr=0x{hr:X8}");
         return hr == DD_OK ? surface : IntPtr.Zero;
+    }
+
+    private static bool EnsurePresent32(int w, int h)
+    {
+        if (_present32Failed)
+        {
+            return false;
+        }
+
+        var wantW = GrainUp(w);
+        var wantH = GrainUp(h);
+        if (_present32 == IntPtr.Zero || _present32W != wantW || _present32H != wantH)
+        {
+            var next = CreateOverlaySurface(wantW, wantH, true, true);
+            if (next != IntPtr.Zero)
+            {
+                ReleaseSurface(ref _present32);
+                _present32 = next;
+                _present32W = wantW;
+                _present32H = wantH;
+                _expandedFromCompose = false; // the cached expansion lived in the old surface
+            }
+            else if (_present32 == IntPtr.Zero || _present32W < w || _present32H < h)
+            {
+                _present32Failed = true;
+                Log.Write("ExactColor: no 32-bit present surface -> the driver expands the frame instead.");
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    // Expand the finished 16-bit frame into _present32 the way the client's own converter does
+    // (render_convert_rgb565_to_xrgb8888, 0x5949A0 in 7.41).
+    // The low bits are left at zero, so 0xFFFF lands as #F8FCF8.
+    private static bool ExpandFrame(IntPtr frame, int w, int h, bool fromCompose)
+    {
+        if (w <= 0 || h <= 0 || !EnsurePresent32(w, h))
+        {
+            return false;
+        }
+
+        if (fromCompose && _expandedFromCompose && _composeValid &&
+            _expandedTick == _composeTick && _expandedW == w && _expandedH == h)
+        {
+            return true;
+        }
+
+        var src = LockSurface(frame, out var srcPitch, Lock.READONLY | Lock.NOSYSLOCK);
+        if (src == null)
+        {
+            return false;
+        }
+
+        var dst = LockSurface(_present32, out var dstPitch, Lock.WRITEONLY | Lock.DISCARDCONTENTS | Lock.NOSYSLOCK);
+        if (dst == null)
+        {
+            UnlockSurface(frame);
+            return false;
+        }
+
+        long started = 0, ended;
+        var timed = (_expandLogs < 3 || _expandLogs % 600 == 0) && QpcFrequency() > 0 &&
+                    QueryPerformanceCounter(&started);
+
+        for (var y = 0; y < h; y++)
+        {
+            ExpandRow((ushort*)(src + (long)y * srcPitch), (uint*)(dst + (long)y * dstPitch), w);
+        }
+
+        UnlockSurface(_present32);
+        UnlockSurface(frame);
+
+        if (timed && QueryPerformanceCounter(&ended))
+        {
+            Log.Write($"ExactColor: expanded {w}x{h} in {(ended - started) * 1000000 / QpcFrequency()}us " +
+                      $"(#{_expandLogs}).");
+        }
+
+        _expandLogs++;
+        _expandedFromCompose = fromCompose;
+        _expandedTick = _composeTick;
+        _expandedW = w;
+        _expandedH = h;
+        return true;
+    }
+
+    // r8 = r5 << 3, g8 = g6 << 2, b8 = b5 << 3, high byte zero. Eight pixels per pass where SSE2
+    // is there (always on x86 Windows 11). The scalar tail is the same arithmetic.
+    private static void ExpandRow(ushort* s, uint* d, int w)
+    {
+        var x = 0;
+        if (Sse2.IsSupported)
+        {
+            var zero = Vector128<ushort>.Zero;
+            var mr = Vector128.Create(0x0000F800u);
+            var mg = Vector128.Create(0x000007E0u);
+            var mb = Vector128.Create(0x0000001Fu);
+            for (; x <= w - 8; x += 8)
+            {
+                var v = Sse2.LoadVector128(s + x);
+                var lo = Sse2.UnpackLow(v, zero).AsUInt32();
+                var hi = Sse2.UnpackHigh(v, zero).AsUInt32();
+                Sse2.Store(d + x, Sse2.Or(Sse2.Or(
+                        Sse2.ShiftLeftLogical(Sse2.And(lo, mr), 8),
+                        Sse2.ShiftLeftLogical(Sse2.And(lo, mg), 5)),
+                    Sse2.ShiftLeftLogical(Sse2.And(lo, mb), 3)));
+                Sse2.Store(d + x + 4, Sse2.Or(Sse2.Or(
+                        Sse2.ShiftLeftLogical(Sse2.And(hi, mr), 8),
+                        Sse2.ShiftLeftLogical(Sse2.And(hi, mg), 5)),
+                    Sse2.ShiftLeftLogical(Sse2.And(hi, mb), 3)));
+            }
+        }
+
+        for (; x < w; x++)
+        {
+            int p = s[x];
+            d[x] = (uint)(((p & 0xF800) << 8) | ((p & 0x07E0) << 5) | ((p & 0x001F) << 3));
+        }
     }
 
     private static void ReleaseSurface(ref IntPtr surface)
@@ -1199,6 +1473,147 @@ internal static unsafe class DDrawHooks
         _dibH = _renderH;
         return true;
     }
+
+    private static void FillLetterbox(Point* origin, Rect* dest, int cw, int ch, int ox, int oy)
+    {
+        if (ox <= 0 && oy <= 0)
+        {
+            _barsValid = false; // no bars now, so nothing on screen to keep
+            return;
+        }
+
+        Rect win;
+        win.left = origin->x;
+        win.top = origin->y;
+        win.right = origin->x + cw;
+        win.bottom = origin->y + ch;
+        RefreshBars(&win, dest);
+    }
+
+    private static bool WindowHidden()
+    {
+        if (_hwnd == IntPtr.Zero)
+        {
+            _hiddenReason = "gone";
+            return true;
+        }
+
+        if (!IsWindowVisible(_hwnd))
+        {
+            _hiddenReason = "not visible";
+            return true;
+        }
+
+        // In borderless we minimize the window ourselves on focus loss, so this is the
+        // expected steady state for an unfocused borderless client, not a fault.
+        if (IsIconic(_hwnd))
+        {
+            _hiddenReason = "minimized";
+            return true;
+        }
+
+        if (Cloaked(_hwnd))
+        {
+            _hiddenReason = "cloaked";
+            return true;
+        }
+
+        var dc = GetDC(_hwnd);
+        if (dc == IntPtr.Zero)
+        {
+            _hiddenReason = "on screen";
+            return false; // cannot tell, so present
+        }
+
+        Rect box;
+        var region = GetClipBox(dc, &box);
+        ReleaseDC(_hwnd, dc);
+        if (region != NULLREGION)
+        {
+            _hiddenReason = "on screen";
+            return false;
+        }
+
+        _hiddenReason = "clipped away";
+        return true;
+    }
+
+    private static void ReportStats()
+    {
+        var now = GetTickCount();
+        if (_statsTick == 0)
+        {
+            _statsTick = now;
+            return;
+        }
+
+        var elapsed = now - _statsTick;
+        if (elapsed < StatsMs)
+        {
+            return;
+        }
+
+        Log.Write($"Present path over {elapsed}ms: {_statsPresents} presented, {_statsPolls} polls, {_statsBarFills} bar fills, " +
+                  $"{_statsSkips} skipped ({(_statsSkips > 0 ? _statsSkipReason : "none")}), cap {_presentHz}Hz.");
+        _statsTick = now;
+        _statsPresents = 0;
+        _statsBarFills = 0;
+        _statsSkips = 0;
+        _statsSkipReason = "none";
+        _statsPolls = 0;
+    }
+
+    private static bool Cloaked(IntPtr hwnd)
+    {
+        if (_dwmUnavailable)
+        {
+            return false;
+        }
+
+        uint cloaked;
+        try
+        {
+            if (DwmGetWindowAttribute(hwnd, DWMWA_CLOAKED, &cloaked, sizeof(uint)) != 0)
+            {
+                return false;
+            }
+        }
+        catch (Exception ex)
+        {
+            _dwmUnavailable = true;
+            Log.Write($"Cloak check unavailable ({ex.GetType().Name}), presenting regardless.");
+            return false;
+        }
+
+        return cloaked != 0;
+    }
+
+    private static void RefreshBars(Rect* win, Rect* content)
+    {
+        var now = GetTickCount();
+        if (_barsValid && SameRect(*win, _barsWin) && SameRect(*content, _barsContent) &&
+            now - _barsTick < BarRefreshMs)
+        {
+            return;
+        }
+
+        FillBars(win, content);
+        _barsWin = *win;
+        _barsContent = *content;
+        _barsTick = now;
+        _barsValid = true;
+        _statsBarFills++;
+        if (_barFills < 3)
+        {
+            Log.Write($"Letterbox filled #{_barFills} win=({win->left},{win->top},{win->right},{win->bottom}) " +
+                      $"content=({content->left},{content->top},{content->right},{content->bottom}).");
+        }
+
+        _barFills++;
+    }
+
+    private static bool SameRect(in Rect a, in Rect b) =>
+        a.left == b.left && a.top == b.top && a.right == b.right && a.bottom == b.bottom;
 
     // Fill the letterbox bars (the parts of the window outside the content) with black.
     private static void FillBars(Rect* win, Rect* content)
@@ -1598,6 +2013,19 @@ internal static unsafe class DDrawHooks
             return 1;
         }
 
+        // Anything that moves the window, resizes it, restacks it or repaints it can have
+        // wiped the letterbox bars, so the next present refills them.
+        if (msg == WM_SIZE || msg == WM_MOVE || msg == WM_WINDOWPOSCHANGED || msg == WM_PAINT ||
+            msg == WM_DISPLAYCHANGE || msg == WM_ACTIVATE || msg == WM_ACTIVATEAPP)
+        {
+            _barsValid = false;
+        }
+
+        if (msg == WM_DISPLAYCHANGE)
+        {
+            _presentHzMonitor = IntPtr.Zero;
+        }
+
         // Re-present the last frame while the window is being resized.
         if (msg == WM_SIZE)
         {
@@ -1839,6 +2267,17 @@ internal static unsafe class DDrawHooks
             Write32(d, SurfaceDesc.Offsets.pf_dwGBitMask, 0x07E0);
             Write32(d, SurfaceDesc.Offsets.pf_dwBBitMask, 0x001F);
         }
+    }
+
+    // The desktop format, so the present blit is a straight copy that cannot reinterpret a value.
+    private static void WriteXrgb8888(byte* d)
+    {
+        Write32(d, SurfaceDesc.Offsets.pf_dwSize, 0x20);
+        Write32(d, SurfaceDesc.Offsets.pf_dwFlags, PixelFormat.Flags.RGB);
+        Write32(d, SurfaceDesc.Offsets.pf_dwRGBBitCount, 32);
+        Write32(d, SurfaceDesc.Offsets.pf_dwRBitMask, 0x00FF0000);
+        Write32(d, SurfaceDesc.Offsets.pf_dwGBitMask, 0x0000FF00);
+        Write32(d, SurfaceDesc.Offsets.pf_dwBBitMask, 0x000000FF);
     }
 
     #endregion
